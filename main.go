@@ -10,26 +10,30 @@ import (
 	"github.com/miekg/dns"
 )
 
+const (
+	defaultCacheTTL    = 10 * time.Second
+	defaultDNSTimeout  = 5 * time.Second
+	defaultWorkerCount = 5
+	defaultTestDomain  = "google.com"
+	defaultDNSPort     = ":53"
+	defaultUDPSize     = 65535
+)
+
 var (
 	reachableServersCache []string
 	cacheLastUpdated      time.Time
-	cacheMutex            = &sync.Mutex{}
-	cacheTTL              = 10 * time.Second
+	cacheMutex            sync.RWMutex
+	cacheTTL              = defaultCacheTTL
+	dnsClient             = &dns.Client{Timeout: defaultDNSTimeout}
 )
-var dnsClient = &dns.Client{Timeout: 5 * time.Second}
 var dnsMsgPool = sync.Pool{
 	New: func() interface{} {
-		m := new(dns.Msg)
-		m.SetQuestion(dns.Fqdn("google.com"), dns.TypeA)
-		m.RecursionDesired = true
-		return m
+		return new(dns.Msg)
 	},
 }
 
 func updateDNSServersCache() {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
+	// Don't lock for the entire update process
 	env := os.Getenv("DNS_SERVERS")
 	log.Printf("DNS_SERVERS: %s", env)
 	var servers []string
@@ -46,21 +50,19 @@ func updateDNSServersCache() {
 	}
 	m := dnsMsgPool.Get().(*dns.Msg)
 	defer dnsMsgPool.Put(m)
-	m.SetQuestion(dns.Fqdn("google.com"), dns.TypeA)
+	m.SetQuestion(dns.Fqdn(defaultTestDomain), dns.TypeA)
 	m.RecursionDesired = true
-	// check if servers are reachable in parallel not to block the main thread
-	var reachable []string
-	var wg sync.WaitGroup
+	// Check servers in parallel
 	reachableCh := make(chan string, len(servers))
-	workerCount := 5
-	sem := make(chan struct{}, workerCount)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, defaultWorkerCount)
 	for _, server := range servers {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(svr string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			_, _, err := dnsClient.Exchange(m, svr)
+			_, _, err := dnsClient.Exchange(m.Copy(), svr)
 			if err != nil {
 				log.Printf("[WARNING] server %s is not reachable: %v", svr, err)
 				return
@@ -72,30 +74,46 @@ func updateDNSServersCache() {
 
 	wg.Wait()
 	close(reachableCh)
+	var reachable []string
 	for svr := range reachableCh {
 		reachable = append(reachable, svr)
 	}
 	if len(reachable) == 0 {
 		log.Fatalf("[ERROR] no reachable DNS servers found")
 	}
+	cacheMutex.Lock()
 	reachableServersCache = reachable
 	cacheLastUpdated = time.Now()
+	cacheMutex.Unlock()
 }
 
 func getCachedDNSServers() []string {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-	if time.Since(cacheLastUpdated) > cacheTTL || len(reachableServersCache) == 0 {
-		updateDNSServersCache()
+	cacheMutex.RLock()
+	if time.Since(cacheLastUpdated) <= cacheTTL && len(reachableServersCache) > 0 {
+		servers := make([]string, len(reachableServersCache))
+		copy(servers, reachableServersCache)
+		cacheMutex.RUnlock()
+		return servers
 	}
-	return append([]string(nil), reachableServersCache...)
+	cacheMutex.RUnlock()
+
+	// Update cache and try again
+	updateDNSServersCache()
+
+	cacheMutex.RLock()
+	servers := make([]string, len(reachableServersCache))
+	copy(servers, reachableServersCache)
+	cacheMutex.RUnlock()
+	return servers
 }
 
 func startDNSServerCacheUpdater() {
+	// Start cache updater in background
 	go func() {
-		for {
+		ticker := time.NewTicker(cacheTTL)
+		defer ticker.Stop()
+		for range ticker.C {
 			updateDNSServersCache()
-			time.Sleep(cacheTTL)
 		}
 	}()
 }
@@ -130,30 +148,39 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg.SetReply(r)
 	msg.Authoritative = true
 
-	for _, question := range r.Question {
-		answers := resolver(question.Name, question.Qtype)
-		msg.Answer = append(msg.Answer, answers...)
+	if len(r.Question) > 0 {
+		q := r.Question[0]
+		answers := resolver(q.Name, q.Qtype)
+		if answers != nil {
+			msg.Answer = answers
+		}
 	}
 
-	w.WriteMsg(msg)
+	if err := w.WriteMsg(msg); err != nil {
+		log.Printf("[ERROR] Failed to write DNS response: %v", err)
+	}
 }
 
 func StartDNSServer() {
+	// Initialize cache on startup
+	updateDNSServersCache()
+
 	handler := new(dnsHandler)
 	server := &dns.Server{
-		Addr:      ":53",
+		Addr:      defaultDNSPort,
 		Net:       "udp",
 		Handler:   handler,
-		UDPSize:   65535,
+		UDPSize:   defaultUDPSize,
 		ReusePort: true,
 	}
 
 	log.Printf("Starting DNS server on port 53")
+
 	startDNSServerCacheUpdater()
 
 	err := server.ListenAndServe()
 	if err != nil {
-		log.Printf("Failed to start server: %s\n", err.Error())
+		log.Fatalf("Failed to start server: %s\n", err.Error())
 	}
 }
 
