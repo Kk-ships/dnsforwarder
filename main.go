@@ -165,14 +165,21 @@ func updateDNSServersCache() {
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
 		logWithBufferFatalf("[ERROR] no DNS servers found")
 	}
+
+	type result struct {
+		server string
+		ok     bool
+	}
+
 	m := dnsMsgPool.Get().(*dns.Msg)
 	defer dnsMsgPool.Put(m)
 	m.SetQuestion(dns.Fqdn(defaultTestDomain), dns.TypeA)
 	m.RecursionDesired = true
-	// Check servers in parallel
-	reachableCh := make(chan string, len(servers))
+
+	reachableCh := make(chan result, len(servers))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, defaultWorkerCount)
+
 	for _, server := range servers {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -182,21 +189,29 @@ func updateDNSServersCache() {
 			_, _, err := dnsClient.Exchange(m.Copy(), svr)
 			if err != nil {
 				logWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
+				reachableCh <- result{server: svr, ok: false}
 				return
 			}
-			reachableCh <- svr
+			reachableCh <- result{server: svr, ok: true}
 		}(server)
 	}
 
-	wg.Wait()
-	close(reachableCh)
+	go func() {
+		wg.Wait()
+		close(reachableCh)
+	}()
+
 	var reachable []string
-	for svr := range reachableCh {
-		reachable = append(reachable, svr)
+	for res := range reachableCh {
+		if res.ok {
+			reachable = append(reachable, res.server)
+		}
 	}
+
 	if len(reachable) == 0 {
 		logWithBufferFatalf("[ERROR] no reachable DNS servers found")
 	}
+
 	cacheMutex.Lock()
 	reachableServersCache = reachable
 	cacheLastUpdated = time.Now()
