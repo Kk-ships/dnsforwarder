@@ -1,10 +1,9 @@
 FROM golang:alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN go mod download
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -buildvcs=false -tags netgo -o main .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -buildvcs=false -tags netgo -o main .
 # Run stage
 FROM scratch AS final
 ENV TZ=UTC

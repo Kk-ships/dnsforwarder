@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -22,10 +23,23 @@ var (
 	cacheStatsMutex sync.Mutex
 	cacheHits       int
 	cacheRequests   int
-	redisClient     = redis.NewClient(&redis.Options{
+	redisClient     *redis.Client
+)
+
+func connectToRedis() {
+	redisClient = redis.NewClient(&redis.Options{
 		Addr: defaultValKeyServer, // Change as needed
 	})
-)
+	logWithBufferf("[REDIS] Connecting to Valkey server at %s", defaultValKeyServer)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		logWithBufferf("[REDIS] Error connecting to valkey server: %v", err)
+		// Optionally handle the error, for example by exiting:
+		os.Exit(1)
+	}
+	logWithBufferf("[REDIS] Successfully connected to Valkey server at %s", defaultValKeyServer)
+}
 
 func cacheKey(domain string, qtype uint16) string {
 	return fmt.Sprintf("%s:%d", domain, qtype)
@@ -88,6 +102,18 @@ func startCacheStatsLogger() {
 			}
 			logWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
 				requests, hits, hitPct, 100-hitPct)
+
+			// log all cache entry stats
+			keys, err := redisClient.Keys(context.Background(), "*").Result()
+			if err != nil {
+				logWithBufferf("[CACHE STATS] Error fetching keys: %v", err)
+				continue
+			}
+			if len(keys) == 0 {
+				logWithBufferf("[CACHE STATS] No cache entries found")
+				continue
+			}
+			logWithBufferf("[CACHE STATS] Cache Entries: %d", len(keys))
 		}
 	}()
 }

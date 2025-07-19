@@ -8,8 +8,6 @@ services:
     restart: always
     environment:
       - TZ=Asia/Kolkata
-    volumes:
-      - dns_cache_data:/app
     depends_on:
       - valkey
 
@@ -20,5 +18,4 @@ services:
     restart: always
 
 volumes:
-  dns_cache_data:
   valkey_data:

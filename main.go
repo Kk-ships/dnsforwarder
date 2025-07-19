@@ -321,6 +321,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 // --- Server Startup ---
 
 func StartDNSServer() {
+	connectToRedis()
 	updateDNSServersCache()
 
 	handler := new(dnsHandler)
