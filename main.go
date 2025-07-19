@@ -96,7 +96,11 @@ var (
 	cacheMutex            sync.RWMutex
 	cacheTTL              = defaultCacheTTL
 	dnsClient             = &dns.Client{Timeout: defaultDNSTimeout}
+	cacheStatsMutex       sync.Mutex
+	cacheHits             int
+	cacheRequests         int
 )
+
 var dnsMsgPool = sync.Pool{
 	New: func() interface{} {
 		return new(dns.Msg)
@@ -305,14 +309,20 @@ type cacheEntry struct {
 
 var dnsCache = lru.NewLRU[string, cacheEntry](defaultCacheSize, nil, defaultDNSCacheTTL)
 
+// Update resolverWithCache to increment counters
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	cacheKey := fmt.Sprintf("%s:%d", domain, qtype)
 
+	cacheStatsMutex.Lock()
+	cacheRequests++
+	cacheStatsMutex.Unlock()
+
 	if entry, ok := dnsCache.Get(cacheKey); ok {
-		logWithBufferf("[CACHE HIT] Domain: %s, Type: %d", domain, qtype)
+		cacheStatsMutex.Lock()
+		cacheHits++
+		cacheStatsMutex.Unlock()
 		return entry.answers
 	}
-	logWithBufferf("[CACHE MISS] Domain: %s, Type: %d", domain, qtype)
 	answers := resolver(domain, qtype)
 	if answers != nil {
 		dnsCache.Add(cacheKey, cacheEntry{
@@ -320,6 +330,25 @@ func resolverWithCache(domain string, qtype uint16) []dns.RR {
 		})
 	}
 	return answers
+}
+
+// Periodically log cache hit/miss percentages
+func startCacheStatsLogger() {
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		for range ticker.C {
+			cacheStatsMutex.Lock()
+			hits := cacheHits
+			requests := cacheRequests
+			cacheStatsMutex.Unlock()
+			hitPct := 0.0
+			if requests > 0 {
+				hitPct = (float64(hits) / float64(requests)) * 100
+			}
+			logWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
+				requests, hits, hitPct, 100-hitPct)
+		}
+	}()
 }
 
 // Update the ServeDNS method to use the caching resolver
@@ -358,6 +387,7 @@ func StartDNSServer() {
 	logWithBufferf("Starting DNS server on port 53")
 
 	startDNSServerCacheUpdater()
+	startCacheStatsLogger()
 
 	// Channel to listen for errors from ListenAndServe
 	errCh := make(chan error, 1)
