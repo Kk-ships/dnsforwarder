@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/miekg/dns"
@@ -74,14 +77,14 @@ func getEnvStringSlice(key, def string) []string {
 // --- Config ---
 
 var (
-	defaultCacheTTL     = getEnvDuration("CACHE_TTL", 10*time.Second)
-	defaultDNSTimeout   = getEnvDuration("DNS_TIMEOUT", 5*time.Second)
-	defaultWorkerCount  = getEnvInt("WORKER_COUNT", 5)
-	defaultTestDomain   = getEnvString("TEST_DOMAIN", "google.com")
-	defaultDNSPort      = getEnvString("DNS_PORT", ":53")
-	defaultUDPSize      = getEnvInt("UDP_SIZE", 65535)
-	defaultDNSStatslog  = getEnvDuration("DNS_STATSLOG", 5*time.Minute)
-	defaultDNSServer    = getEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
+	defaultCacheTTL    = getEnvDuration("CACHE_TTL", 10*time.Second)
+	defaultDNSTimeout  = getEnvDuration("DNS_TIMEOUT", 5*time.Second)
+	defaultWorkerCount = getEnvInt("WORKER_COUNT", 5)
+	defaultTestDomain  = getEnvString("TEST_DOMAIN", "google.com")
+	defaultDNSPort     = getEnvString("DNS_PORT", ":53")
+	defaultUDPSize     = getEnvInt("UDP_SIZE", 65535)
+	defaultDNSStatslog = getEnvDuration("DNS_STATSLOG", 5*time.Minute)
+	defaultDNSServer   = getEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
 )
 
 var (
@@ -329,13 +332,33 @@ func StartDNSServer() {
 
 	startDNSServerCacheUpdater()
 
-	err := server.ListenAndServe()
-	if err != nil {
-		logWithBufferFatalf("Failed to start server: %s\n", err.Error())
+	// Channel to listen for errors from ListenAndServe
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+
+	// Set up signal handling for graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case sig := <-sigCh:
+		logWithBufferf("Received signal %s, shutting down DNS server gracefully...", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.ShutdownContext(ctx); err != nil {
+			logWithBufferf("[ERROR] Graceful shutdown failed: %v", err)
+		} else {
+			logWithBufferf("DNS server shut down gracefully")
+		}
+	case err := <-errCh:
+		if err != nil {
+			logWithBufferFatalf("Failed to start server: %s\n", err.Error())
+		}
 	}
 }
 
 func main() {
 	StartDNSServer()
 }
-
