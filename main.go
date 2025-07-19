@@ -87,6 +87,7 @@ var (
 	defaultDNSStatslog = getEnvDuration("DNS_STATSLOG", 5*time.Minute)
 	defaultDNSServer   = getEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
 	defaultCacheSize   = getEnvInt("CACHE_SIZE", 10000)
+	defaultDNSCacheTTL = getEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
 )
 
 var (
