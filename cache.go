@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -21,8 +22,8 @@ var defaultValKeyServer = getEnvString("VALKEY_SERVER", "valkey:6379")
 
 var (
 	cacheStatsMutex sync.Mutex
-	cacheHits       int
-	cacheRequests   int
+	cacheHits       int64
+	cacheRequests   int64
 	redisClient     *redis.Client
 )
 
@@ -33,6 +34,13 @@ func init() {
 	gob.Register(&dns.MX{})
 	gob.Register(&dns.NS{})
 	gob.Register(&dns.TXT{})
+	gob.Register(&dns.SRV{})
+	gob.Register(&dns.PTR{})
+	gob.Register(&dns.SOA{})
+	gob.Register(&dns.DNSKEY{})
+	gob.Register(&dns.RRSIG{})
+	gob.Register(&dns.CAA{})
+	gob.Register(&dns.SPF{})
 }
 func connectToRedis() {
 	redisClient = redis.NewClient(&redis.Options{
@@ -75,17 +83,9 @@ func loadFromValkey(key string) (cacheEntry, bool) {
 
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	key := cacheKey(domain, qtype)
-	go func() {
-		cacheStatsMutex.Lock()
-		cacheRequests++
-		cacheStatsMutex.Unlock()
-	}()
+	go atomic.AddInt64(&cacheRequests, 1)
 	if entry, ok := loadFromValkey(key); ok {
-		go func() {
-			cacheStatsMutex.Lock()
-			cacheHits++
-			cacheStatsMutex.Unlock()
-		}()
+		go atomic.AddInt64(&cacheHits, 1)
 		return entry.Answers
 	}
 	answers := resolver(domain, qtype)
