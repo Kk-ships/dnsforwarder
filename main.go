@@ -31,6 +31,10 @@ var dnsMsgPool = sync.Pool{
 		return new(dns.Msg)
 	},
 }
+var (
+    dnsUsageStats = make(map[string]int)
+    statsMutex    sync.Mutex
+)
 
 func updateDNSServersCache() {
 	// Don't lock for the entire update process
@@ -104,8 +108,17 @@ func getCachedDNSServers() []string {
 	cacheMutex.RUnlock()
 	return servers
 }
-
+func startDNSUsageLogger() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		statsMutex.Lock()
+		log.Printf("DNS Usage Stats: %+v", dnsUsageStats)
+		statsMutex.Unlock()
+	}
+}
 func startDNSServerCacheUpdater() {
+	go startDNSUsageLogger()
 	// Start cache updater in background
 	go func() {
 		ticker := time.NewTicker(cacheTTL)
@@ -127,12 +140,15 @@ func resolver(domain string, qtype uint16) []dns.RR {
 	var err error
 
 	for _, svr := range servers {
-		response, _, err = dnsClient.Exchange(m, svr)
-		if err == nil && response != nil {
-			return response.Answer
-		}
-		log.Printf("[WARNING] exchange error using server %s: %v", svr, err)
+	response, _, err = dnsClient.Exchange(m, svr)
+	if err == nil && response != nil {
+		statsMutex.Lock()
+		dnsUsageStats[svr]++
+		statsMutex.Unlock()
+		return response.Answer
 	}
+	log.Printf("[WARNING] exchange error using server %s: %v", svr, err)
+}
 	log.Fatalf("[ERROR] all DNS exchanges failed")
 	return nil
 }
