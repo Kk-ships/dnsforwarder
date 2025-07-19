@@ -4,73 +4,96 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
-func getDNSServers() []string {
+var (
+	reachableServersCache []string
+	cacheLastUpdated      time.Time
+	cacheMutex            = &sync.Mutex{}
+	cacheTTL              = 10 * time.Second
+)
+
+func updateDNSServersCache() {
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+
 	env := os.Getenv("DNS_SERVERS")
 	log.Printf("DNS_SERVERS: %s", env)
+	var servers []string
 	if env == "" {
-		return []string{"8.8.8.8:53"}
-	}
-	servers := strings.Split(env, ",")
-	for i, s := range servers {
-		servers[i] = strings.TrimSpace(s)
-	}
-	log.Printf("Using servers : %v", servers)
-	if len(servers) == 0 {
-		log.Fatalf("[ERROR] no DNS servers found")
-	}
-	if len(servers) == 1 && servers[0] == "" {
-		log.Fatalf("[ERROR] no DNS servers found")
-	}
-	if len(servers) > 1 {
-		log.Printf("[INFO] using multiple DNS servers: %v", servers)
+		servers = []string{"8.8.8.8:53"}
 	} else {
-		log.Printf("[INFO] using single DNS server: %s", servers[0])
+		servers = strings.Split(env, ",")
+		for i, s := range servers {
+			servers[i] = strings.TrimSpace(s)
+		}
 	}
-	// Check if the first server is reachable
+	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
+		log.Fatalf("[ERROR] no DNS servers found")
+	}
+
 	c := &dns.Client{Timeout: 5 * time.Second}
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn("google.com"), dns.TypeA)
 	m.RecursionDesired = true
-	_, _, err := c.Exchange(m, servers[0])
-	if err != nil {
-		log.Printf("[WARNING] server %s is not reachable: %v", servers[0], err)
-		servers = servers[1:] // Remove the first server from the list
-		if len(servers) == 0 {
-			log.Fatalf("[ERROR] no reachable DNS servers found")
-		}
-		log.Printf("[INFO] using remaining DNS servers: %v", servers)
-	}
-    if err == nil {
-        log.Printf("[INFO] server %s is reachable", servers[0])
-        return servers
-    }
-	// Check if the remaining servers are reachable
-	var reachableServers []string
+	// check if servers are reachable
+	var reachable []string
+	var wg sync.WaitGroup
+	reachableCh := make(chan string, len(servers))
+
 	for _, server := range servers {
-		_, _, err := c.Exchange(m, server)
-		if err != nil {
-			log.Printf("[WARNING] server %s is not reachable: %v", server, err)
-			continue
-		}
-		log.Printf("[INFO] server %s is reachable", server)
-		reachableServers = append(reachableServers, server)
+		wg.Add(1)
+		go func(svr string) {
+			defer wg.Done()
+			_, _, err := c.Exchange(m, svr)
+			if err != nil {
+				log.Printf("[WARNING] server %s is not reachable: %v", svr, err)
+				return
+			}
+			log.Printf("[INFO] server %s is reachable", svr)
+			reachableCh <- svr
+		}(server)
 	}
-	if len(reachableServers) == 0 {
-	    log.Fatalf("[ERROR] no reachable DNS servers found")
-    }
-	return reachableServers
+
+	wg.Wait()
+	close(reachableCh)
+	for svr := range reachableCh {
+		reachable = append(reachable, svr)
+	}
+	if len(reachable) == 0 {
+		log.Fatalf("[ERROR] no reachable DNS servers found")
+	}
+	reachableServersCache = reachable
+	cacheLastUpdated = time.Now()
+}
+
+func getCachedDNSServers() []string {
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+	if time.Since(cacheLastUpdated) > cacheTTL || len(reachableServersCache) == 0 {
+		updateDNSServersCache()
+	}
+	return append([]string(nil), reachableServersCache...)
+}
+
+func startDNSServerCacheUpdater() {
+	go func() {
+		for {
+			updateDNSServersCache()
+			time.Sleep(cacheTTL)
+		}
+	}()
 }
 
 func resolver(domain string, qtype uint16) []dns.RR {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), qtype)
 	m.RecursionDesired = true
-	servers := getDNSServers()
+	servers := getCachedDNSServers()
 	c := &dns.Client{Timeout: 1 * time.Second}
 	var response *dns.Msg
 	var err error
@@ -123,6 +146,7 @@ func StartDNSServer() {
 	}
 
 	log.Printf("Starting DNS server on port 53")
+	startDNSServerCacheUpdater()
 
 	err := server.ListenAndServe()
 	if err != nil {
