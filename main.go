@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/miekg/dns"
 )
 
@@ -96,9 +95,6 @@ var (
 	cacheMutex            sync.RWMutex
 	cacheTTL              = defaultCacheTTL
 	dnsClient             = &dns.Client{Timeout: defaultDNSTimeout}
-	cacheStatsMutex       sync.Mutex
-	cacheHits             int
-	cacheRequests         int
 )
 
 var dnsMsgPool = sync.Pool{
@@ -303,54 +299,6 @@ func resolver(domain string, qtype uint16) []dns.RR {
 
 type dnsHandler struct{}
 
-type cacheEntry struct {
-	answers []dns.RR
-}
-
-var dnsCache = lru.NewLRU[string, cacheEntry](defaultCacheSize, nil, defaultDNSCacheTTL)
-
-// Update resolverWithCache to increment counters
-func resolverWithCache(domain string, qtype uint16) []dns.RR {
-	cacheKey := fmt.Sprintf("%s:%d", domain, qtype)
-
-	cacheStatsMutex.Lock()
-	cacheRequests++
-	cacheStatsMutex.Unlock()
-
-	if entry, ok := dnsCache.Get(cacheKey); ok {
-		cacheStatsMutex.Lock()
-		cacheHits++
-		cacheStatsMutex.Unlock()
-		return entry.answers
-	}
-	answers := resolver(domain, qtype)
-	if answers != nil {
-		dnsCache.Add(cacheKey, cacheEntry{
-			answers: answers,
-		})
-	}
-	return answers
-}
-
-// Periodically log cache hit/miss percentages
-func startCacheStatsLogger() {
-	ticker := time.NewTicker(1 * time.Minute)
-	go func() {
-		for range ticker.C {
-			cacheStatsMutex.Lock()
-			hits := cacheHits
-			requests := cacheRequests
-			cacheStatsMutex.Unlock()
-			hitPct := 0.0
-			if requests > 0 {
-				hitPct = (float64(hits) / float64(requests)) * 100
-			}
-			logWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
-				requests, hits, hitPct, 100-hitPct)
-		}
-	}()
-}
-
 // Update the ServeDNS method to use the caching resolver
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg := new(dns.Msg)
@@ -374,6 +322,8 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 func StartDNSServer() {
 	updateDNSServersCache()
+	// Load cache at startup
+	_ = loadCacheFromDisk()
 
 	handler := new(dnsHandler)
 	server := &dns.Server{
@@ -409,6 +359,8 @@ func StartDNSServer() {
 		} else {
 			logWithBufferf("DNS server shut down gracefully")
 		}
+		// Save cache on shutdown
+		_ = saveCacheToDisk()
 	case err := <-errCh:
 		if err != nil {
 			logWithBufferFatalf("Failed to start server: %s\n", err.Error())
