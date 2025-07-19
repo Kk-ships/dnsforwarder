@@ -48,12 +48,26 @@ func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	atomic.AddInt64(&cacheRequests, 1)
 	if answers, ok := loadFromCache(key); ok {
 		atomic.AddInt64(&cacheHits, 1)
-		return answers // No copy, just return the slice reference
+		return answers
 	}
 	answers := resolver(domain, qtype)
-	go func(ans []dns.RR, k string) {
-		saveToCache(k, ans, defaultDNSCacheTTL)
-	}(answers, key)
+	minTTL := uint32(0)
+	if len(answers) > 0 {
+		// Find the minimum TTL from the answers
+		minTTL = answers[0].Header().Ttl
+		for _, rr := range answers[1:] {
+			if ttl := rr.Header().Ttl; ttl < minTTL {
+				minTTL = ttl
+			}
+		}
+	}
+	ttl := defaultDNSCacheTTL
+	if minTTL > 0 {
+		ttl = time.Duration(minTTL) * time.Second
+	}
+	go func(ans []dns.RR, k string, t time.Duration) {
+		saveToCache(k, ans, t)
+	}(answers, key, ttl)
 	return answers
 }
 
