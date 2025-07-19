@@ -3,7 +3,11 @@ module dnsloadbalancer
 go 1.24.3
 
 require (
-	github.com/miekg/dns v1.1.66 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/miekg/dns v1.1.66
+)
+
+require (
 	golang.org/x/mod v0.24.0 // indirect
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sync v0.13.0 // indirect
