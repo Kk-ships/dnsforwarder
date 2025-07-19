@@ -1,6 +1,10 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        TARGETOS: linux
+        TARGETARCH: amd64
     ports:
       - "53:53/udp"
     env_file:

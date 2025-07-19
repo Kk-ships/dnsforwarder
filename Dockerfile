@@ -1,10 +1,21 @@
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
 FROM golang:alpine AS builder
 RUN apk add -U tzdata
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -trimpath -buildvcs=false -tags netgo -o main .
+RUN CGO_ENABLED=0 \
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH} \
+    go build \
+        -ldflags="-s -w" \
+        -trimpath \
+        -buildvcs=false \
+        -tags netgo \
+        -o main .
 # Run stage
 FROM scratch AS final
 ENV TZ=UTC
