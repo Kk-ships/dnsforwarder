@@ -13,6 +13,9 @@ type cacheEntry struct {
 	Answers []dns.RR
 }
 
+const aRecordInvalidAnswer = "0.0.0.0"
+const aaaRecordInvalidAnswer = "::"
+
 var (
 	cacheHits     int64
 	cacheRequests int64
@@ -46,28 +49,52 @@ func loadFromCache(key string) ([]dns.RR, bool) {
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	key := cacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
+
+	// Attempt to load from cache
 	if answers, ok := loadFromCache(key); ok {
 		atomic.AddInt64(&cacheHits, 1)
 		return answers
 	}
+
+	// Resolve the domain
 	answers := resolver(domain, qtype)
-	minTTL := uint32(0)
-	if len(answers) > 0 {
-		// Find the minimum TTL from the answers
-		minTTL = answers[0].Header().Ttl
-		for _, rr := range answers[1:] {
-			if ttl := rr.Header().Ttl; ttl < minTTL {
-				minTTL = ttl
+	if len(answers) == 0 {
+		go saveToCache(key, answers, defaultDNSCacheTTL)
+		return answers
+	}
+
+	// Determine the minimum TTL and check for special cases
+	minTTL := uint32(^uint32(0)) // Max uint32 value
+	useDefaultTTL := false
+	for _, rr := range answers {
+		ttl := rr.Header().Ttl
+		if ttl < minTTL {
+			minTTL = ttl
+		}
+		switch v := rr.(type) {
+		case *dns.A:
+			if v.A.String() == aRecordInvalidAnswer {
+				useDefaultTTL = true
+			}
+		case *dns.AAAA:
+			if v.AAAA.String() == aaaRecordInvalidAnswer {
+				useDefaultTTL = true
 			}
 		}
+		if useDefaultTTL {
+			break
+		}
 	}
+
+	// Set TTL for caching
 	ttl := defaultDNSCacheTTL
-	if minTTL > 0 {
+	if !useDefaultTTL && minTTL > 0 {
 		ttl = time.Duration(minTTL) * time.Second
 	}
-	go func(ans []dns.RR, k string, t time.Duration) {
-		saveToCache(k, ans, t)
-	}(answers, key, ttl)
+
+	// Save to cache asynchronously
+	go saveToCache(key, answers, ttl)
+
 	return answers
 }
 
