@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -96,6 +97,68 @@ var (
 	statsMutex    sync.Mutex
 )
 
+// Log ring buffer to keep last 500 logs
+type LogRingBuffer struct {
+	entries []string
+	max     int
+	idx     int
+	full    bool
+	sync.Mutex
+}
+
+func NewLogRingBuffer(size int) *LogRingBuffer {
+	return &LogRingBuffer{
+		entries: make([]string, size),
+		max:     size,
+	}
+}
+
+func (l *LogRingBuffer) Add(entry string) {
+	l.Lock()
+	defer l.Unlock()
+	l.entries[l.idx] = entry
+	l.idx = (l.idx + 1) % l.max
+	if l.idx == 0 {
+		l.full = true
+	}
+}
+
+func (l *LogRingBuffer) GetAll() []string {
+	l.Lock()
+	defer l.Unlock()
+	if !l.full {
+		return l.entries[:l.idx]
+	}
+	result := make([]string, l.max)
+	copy(result, l.entries[l.idx:])
+	copy(result[l.max-l.idx:], l.entries[:l.idx])
+	return result
+}
+
+var logBuffer = NewLogRingBuffer(500)
+
+func logWithBufferf(format string, v ...interface{}) {
+	msg := format
+	if len(v) > 0 {
+		msg = sprintf(format, v...)
+	}
+	logBuffer.Add(msg)
+	log.Printf(format, v...)
+}
+
+func logWithBufferFatalf(format string, v ...interface{}) {
+	msg := format
+	if len(v) > 0 {
+		msg = sprintf(format, v...)
+	}
+	logBuffer.Add(msg)
+	log.Fatalf(format, v...)
+}
+
+func sprintf(format string, v ...interface{}) string {
+	return fmt.Sprintf(format, v...)
+}
+
 func updateDNSServersCache() {
 	// Don't lock for the entire update process
 	env := os.Getenv("DNS_SERVERS")
@@ -109,7 +172,7 @@ func updateDNSServersCache() {
 		}
 	}
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
-		log.Fatalf("[ERROR] no DNS servers found")
+		logWithBufferFatalf("[ERROR] no DNS servers found")
 	}
 	m := dnsMsgPool.Get().(*dns.Msg)
 	defer dnsMsgPool.Put(m)
@@ -127,7 +190,7 @@ func updateDNSServersCache() {
 			defer func() { <-sem }()
 			_, _, err := dnsClient.Exchange(m.Copy(), svr)
 			if err != nil {
-				log.Printf("[WARNING] server %s is not reachable: %v", svr, err)
+				logWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
 				return
 			}
 			reachableCh <- svr
@@ -141,7 +204,7 @@ func updateDNSServersCache() {
 		reachable = append(reachable, svr)
 	}
 	if len(reachable) == 0 {
-		log.Fatalf("[ERROR] no reachable DNS servers found")
+		logWithBufferFatalf("[ERROR] no reachable DNS servers found")
 	}
 	cacheMutex.Lock()
 	reachableServersCache = reachable
@@ -173,7 +236,7 @@ func startDNSUsageLogger() {
 	defer ticker.Stop()
 	for range ticker.C {
 		statsMutex.Lock()
-		log.Printf("DNS Usage Stats: %+v", dnsUsageStats)
+		logWithBufferf("DNS Usage Stats: %+v", dnsUsageStats)
 		statsMutex.Unlock()
 	}
 }
@@ -207,9 +270,9 @@ func resolver(domain string, qtype uint16) []dns.RR {
 			statsMutex.Unlock()
 			return response.Answer
 		}
-		log.Printf("[WARNING] exchange error using server %s: %v", svr, err)
+		logWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
 	}
-	log.Fatalf("[ERROR] all DNS exchanges failed")
+	logWithBufferFatalf("[ERROR] all DNS exchanges failed")
 	return nil
 }
 
@@ -229,7 +292,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-		log.Printf("[ERROR] Failed to write DNS response: %v", err)
+		logWithBufferf("[ERROR] Failed to write DNS response: %v", err)
 	}
 }
 
@@ -246,13 +309,13 @@ func StartDNSServer() {
 		ReusePort: true,
 	}
 
-	log.Printf("Starting DNS server on port 53")
+	logWithBufferf("Starting DNS server on port 53")
 
 	startDNSServerCacheUpdater()
 
 	err := server.ListenAndServe()
 	if err != nil {
-		log.Fatalf("Failed to start server: %s\n", err.Error())
+		logWithBufferFatalf("Failed to start server: %s\n", err.Error())
 	}
 }
 
