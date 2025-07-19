@@ -1,130 +1,82 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"encoding/gob"
-	"fmt"
-	"os"
-	"sync"
-	"sync/atomic"
-	"time"
+    "fmt"
+    "sync/atomic"
+    "time"
 
-	"github.com/miekg/dns"
-	"github.com/redis/go-redis/v9"
+    "github.com/miekg/dns"
+    "github.com/patrickmn/go-cache"
 )
 
 type cacheEntry struct {
-	Answers []dns.RR
+    Answers []dns.RR
 }
 
-var defaultValKeyServer = getEnvString("VALKEY_SERVER", "valkey:6379")
-
 var (
-	cacheStatsMutex sync.Mutex
-	cacheHits       int64
-	cacheRequests   int64
-	redisClient     *redis.Client
+    cacheHits     int64
+    cacheRequests int64
+    dnsCache      *cache.Cache
 )
 
 func init() {
-	gob.Register(&dns.A{})
-	gob.Register(&dns.AAAA{})
-	gob.Register(&dns.CNAME{})
-	gob.Register(&dns.MX{})
-	gob.Register(&dns.NS{})
-	gob.Register(&dns.TXT{})
-	gob.Register(&dns.SRV{})
-	gob.Register(&dns.PTR{})
-	gob.Register(&dns.SOA{})
-	gob.Register(&dns.DNSKEY{})
-	gob.Register(&dns.RRSIG{})
-	gob.Register(&dns.CAA{})
-	gob.Register(&dns.SPF{})
-}
-func connectToRedis() {
-	redisClient = redis.NewClient(&redis.Options{
-		Addr: defaultValKeyServer, // Change as needed
-	})
-	logWithBufferf("[REDIS] Connecting to Valkey server at %s", defaultValKeyServer)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		logWithBufferf("[REDIS] Error connecting to valkey server: %v", err)
-		// Optionally handle the error, for example by exiting:
-		os.Exit(1)
-	}
-	logWithBufferf("[REDIS] Successfully connected to Valkey server at %s", defaultValKeyServer)
+    dnsCache = cache.New(defaultDNSCacheTTL, 2*defaultDNSCacheTTL)
 }
 
 func cacheKey(domain string, qtype uint16) string {
-	return fmt.Sprintf("%s:%d", domain, qtype)
+    return fmt.Sprintf("%s:%d", domain, qtype)
 }
 
-func saveToValkey(key string, entry cacheEntry, ttl time.Duration) error {
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(entry); err != nil {
-		return err
-	}
-	return redisClient.Set(context.Background(), key, buf.Bytes(), ttl).Err()
+func saveToCache(key string, entry cacheEntry, ttl time.Duration) {
+    dnsCache.Set(key, entry.Answers, ttl)
 }
 
-func loadFromValkey(key string) (cacheEntry, bool) {
-	val, err := redisClient.Get(context.Background(), key).Bytes()
-	if err != nil {
-		return cacheEntry{}, false
-	}
-	var entry cacheEntry
-	if err := gob.NewDecoder(bytes.NewReader(val)).Decode(&entry); err != nil {
-		return cacheEntry{}, false
-	}
-	return entry, true
+func loadFromCache(key string) (cacheEntry, bool) {
+    val, found := dnsCache.Get(key)
+    if !found {
+        return cacheEntry{}, false
+    }
+    answers, ok := val.([]dns.RR)
+    if !ok {
+        return cacheEntry{}, false
+    }
+    return cacheEntry{Answers: answers}, true
 }
 
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
-	key := cacheKey(domain, qtype)
-	go atomic.AddInt64(&cacheRequests, 1)
-	if entry, ok := loadFromValkey(key); ok {
-		go atomic.AddInt64(&cacheHits, 1)
-		return entry.Answers
-	}
-	answers := resolver(domain, qtype)
-	go func(ans []dns.RR, k string) {
-		err := saveToValkey(k, cacheEntry{Answers: ans}, defaultDNSCacheTTL)
-		if err != nil {
-			logWithBufferf("[CACHE] Error saving to Valkey: %v", err)
-		}
-	}(answers, key)
-	return answers
+    key := cacheKey(domain, qtype)
+    go atomic.AddInt64(&cacheRequests, 1)
+    if entry, ok := loadFromCache(key); ok {
+        go atomic.AddInt64(&cacheHits, 1)
+        return entry.Answers
+    }
+    answers := resolver(domain, qtype)
+    go func(ans []dns.RR, k string) {
+        saveToCache(k, cacheEntry{Answers: ans}, defaultDNSCacheTTL)
+    }(answers, key)
+    return answers
 }
 
 // Periodically log cache hit/miss percentages
 func startCacheStatsLogger() {
-	ticker := time.NewTicker(1 * time.Minute)
-	go func() {
-		for range ticker.C {
-			cacheStatsMutex.Lock()
-			hits := cacheHits
-			requests := cacheRequests
-			cacheStatsMutex.Unlock()
-			hitPct := 0.0
-			if requests > 0 {
-				hitPct = (float64(hits) / float64(requests)) * 100
-			}
-			logWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
-				requests, hits, hitPct, 100-hitPct)
-
-			// log all cache entry stats
-			keys, err := redisClient.Keys(context.Background(), "*").Result()
-			if err != nil {
-				logWithBufferf("[CACHE STATS] Error fetching keys: %v", err)
-				continue
-			}
-			if len(keys) == 0 {
-				logWithBufferf("[CACHE STATS] No cache entries found")
-				continue
-			}
-			logWithBufferf("[CACHE STATS] Cache Entries: %d", len(keys))
-		}
-	}()
+    ticker := time.NewTicker(1 * time.Minute)
+    go func() {
+        for range ticker.C {
+            hits := cacheHits
+            requests := cacheRequests
+            hitPct := 0.0
+            if requests > 0 {
+                hitPct = (float64(hits) / float64(requests)) * 100
+            }
+            logWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
+                requests, hits, hitPct, 100-hitPct)
+            // log all cache entry stats
+            items := dnsCache.Items()
+            if len(items) == 0 {
+                logWithBufferf("[CACHE STATS] No cache entries found")
+                continue
+            }
+            logWithBufferf("[CACHE STATS] Cache Entries: %d", len(items))
+        }
+    }()
 }

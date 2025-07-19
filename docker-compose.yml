@@ -8,14 +8,3 @@ services:
     restart: always
     environment:
       - TZ=Asia/Kolkata
-    depends_on:
-      - valkey
-
-  valkey:
-    image: valkey/valkey:alpine
-    volumes:
-      - valkey_data:/data
-    restart: always
-
-volumes:
-  valkey_data:
