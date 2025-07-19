@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -10,13 +11,72 @@ import (
 	"github.com/miekg/dns"
 )
 
-const (
-	defaultCacheTTL    = 10 * time.Second
-	defaultDNSTimeout  = 5 * time.Second
-	defaultWorkerCount = 5
-	defaultTestDomain  = "google.com"
-	defaultDNSPort     = ":53"
-	defaultUDPSize     = 65535
+var (
+	defaultCacheTTL = func() time.Duration {
+		if v := os.Getenv("CACHE_TTL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				return d
+			}
+		}
+		return 10 * time.Second
+	}()
+
+	defaultDNSTimeout = func() time.Duration {
+		if v := os.Getenv("DNS_TIMEOUT"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				return d
+			}
+		}
+		return 5 * time.Second
+	}()
+
+	defaultWorkerCount = func() int {
+		if v := os.Getenv("WORKER_COUNT"); v != "" {
+			if i, err := strconv.Atoi(v); err == nil {
+				return i
+			}
+		}
+		return 5
+	}()
+
+	defaultTestDomain = func() string {
+		if v := os.Getenv("TEST_DOMAIN"); v != "" {
+			return v
+		}
+		return "google.com"
+	}()
+
+	defaultDNSPort = func() string {
+		if v := os.Getenv("DNS_PORT"); v != "" {
+			return v
+		}
+		return ":53"
+	}()
+
+	defaultUDPSize = func() int {
+		if v := os.Getenv("UDP_SIZE"); v != "" {
+			if i, err := strconv.Atoi(v); err == nil {
+				return i
+			}
+		}
+		return 65535
+	}()
+
+	defaultDNSStatslog = func() time.Duration {
+		if v := os.Getenv("DNS_STATSLOG"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				return d
+			}
+		}
+		return 5 * time.Minute
+	}()
+
+	defaultDNSServer = func() string {
+		if v := os.Getenv("DEFAULT_DNS_SERVER"); v != "" {
+			return v
+		}
+		return "8.8.8.8:53"
+	}()
 )
 
 var (
@@ -32,8 +92,8 @@ var dnsMsgPool = sync.Pool{
 	},
 }
 var (
-    dnsUsageStats = make(map[string]int)
-    statsMutex    sync.Mutex
+	dnsUsageStats = make(map[string]int)
+	statsMutex    sync.Mutex
 )
 
 func updateDNSServersCache() {
@@ -41,7 +101,7 @@ func updateDNSServersCache() {
 	env := os.Getenv("DNS_SERVERS")
 	var servers []string
 	if env == "" {
-		servers = []string{"8.8.8.8:53"}
+		servers = []string{defaultDNSServer}
 	} else {
 		servers = strings.Split(env, ",")
 		for i, s := range servers {
@@ -109,7 +169,7 @@ func getCachedDNSServers() []string {
 	return servers
 }
 func startDNSUsageLogger() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(defaultDNSStatslog)
 	defer ticker.Stop()
 	for range ticker.C {
 		statsMutex.Lock()
@@ -140,15 +200,15 @@ func resolver(domain string, qtype uint16) []dns.RR {
 	var err error
 
 	for _, svr := range servers {
-	response, _, err = dnsClient.Exchange(m, svr)
-	if err == nil && response != nil {
-		statsMutex.Lock()
-		dnsUsageStats[svr]++
-		statsMutex.Unlock()
-		return response.Answer
+		response, _, err = dnsClient.Exchange(m, svr)
+		if err == nil && response != nil {
+			statsMutex.Lock()
+			dnsUsageStats[svr]++
+			statsMutex.Unlock()
+			return response.Answer
+		}
+		log.Printf("[WARNING] exchange error using server %s: %v", svr, err)
 	}
-	log.Printf("[WARNING] exchange error using server %s: %v", svr, err)
-}
 	log.Fatalf("[ERROR] all DNS exchanges failed")
 	return nil
 }
