@@ -35,7 +35,6 @@ var dnsMsgPool = sync.Pool{
 func updateDNSServersCache() {
 	// Don't lock for the entire update process
 	env := os.Getenv("DNS_SERVERS")
-	log.Printf("DNS_SERVERS: %s", env)
 	var servers []string
 	if env == "" {
 		servers = []string{"8.8.8.8:53"}
@@ -67,7 +66,6 @@ func updateDNSServersCache() {
 				log.Printf("[WARNING] server %s is not reachable: %v", svr, err)
 				return
 			}
-			log.Printf("[INFO] server %s is reachable", svr)
 			reachableCh <- svr
 		}(server)
 	}
@@ -131,12 +129,10 @@ func resolver(domain string, qtype uint16) []dns.RR {
 	for _, svr := range servers {
 		response, _, err = dnsClient.Exchange(m, svr)
 		if err == nil && response != nil {
-			log.Printf("[INFO] response from server %s", svr)
 			return response.Answer
 		}
 		log.Printf("[WARNING] exchange error using server %s: %v", svr, err)
 	}
-
 	log.Fatalf("[ERROR] all DNS exchanges failed")
 	return nil
 }
