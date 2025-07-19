@@ -8,6 +8,10 @@ RUN go build -o main .
 
 # Run stage
 FROM alpine:latest
+RUN apk add --no-cache tzdata
+# Set the timezone to UTC if not specified
+ARG TZ=UTC
+ENV TZ=${TZ}
 WORKDIR /app
 COPY --from=builder /app/main .
 RUN adduser -D -u 10001 appuser && chown appuser:appuser /app/main
