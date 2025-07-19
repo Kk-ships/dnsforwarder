@@ -10,6 +10,15 @@ services:
       - TZ=Asia/Kolkata
     volumes:
       - dns_cache_data:/app
+    depends_on:
+      - valkey
+
+  valkey:
+    image: valkey/valkey:alpine
+    volumes:
+      - valkey_data:/data
+    restart: always
 
 volumes:
   dns_cache_data:
+  valkey_data:

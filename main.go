@@ -322,8 +322,6 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 func StartDNSServer() {
 	updateDNSServersCache()
-	// Load cache at startup
-	_ = loadCacheFromDisk()
 
 	handler := new(dnsHandler)
 	server := &dns.Server{
@@ -359,8 +357,6 @@ func StartDNSServer() {
 		} else {
 			logWithBufferf("DNS server shut down gracefully")
 		}
-		// Save cache on shutdown
-		_ = saveCacheToDisk()
 	case err := <-errCh:
 		if err != nil {
 			logWithBufferFatalf("Failed to start server: %s\n", err.Error())

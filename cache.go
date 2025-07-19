@@ -1,102 +1,74 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/gob"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/miekg/dns"
+	"github.com/redis/go-redis/v9"
 )
 
 type cacheEntry struct {
-	answers []dns.RR
+	Answers []dns.RR
 }
 
+var defaultValKeyServer = getEnvString("VALKEY_SERVER", "valkey:6379")
+
 var (
-	dnsCache        = lru.NewLRU[string, cacheEntry](defaultCacheSize, nil, defaultDNSCacheTTL)
 	cacheStatsMutex sync.Mutex
 	cacheHits       int
 	cacheRequests   int
+	redisClient     = redis.NewClient(&redis.Options{
+		Addr: defaultValKeyServer, // Change as needed
+	})
 )
 
-const cacheFile = "dns_cache.gob"
+func cacheKey(domain string, qtype uint16) string {
+	return fmt.Sprintf("%s:%d", domain, qtype)
+}
 
-// Save cache to disk
-func saveCacheToDisk() error {
-	logWithBufferf("[INFO] Saving DNS cache to disk: %s", cacheFile)
-	f, err := os.Create(cacheFile)
+func saveToValkey(key string, entry cacheEntry, ttl time.Duration) error {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(entry); err != nil {
+		return err
+	}
+	return redisClient.Set(context.Background(), key, buf.Bytes(), ttl).Err()
+}
+
+func loadFromValkey(key string) (cacheEntry, bool) {
+	val, err := redisClient.Get(context.Background(), key).Bytes()
 	if err != nil {
-		logWithBufferf("[ERROR] Failed to create cache file: %v", err)
-		return err
+		return cacheEntry{}, false
 	}
-	defer f.Close()
-	enc := gob.NewEncoder(f)
-	cache := make(map[string]cacheEntry)
-	for _, k := range dnsCache.Keys() {
-		if v, ok := dnsCache.Get(k); ok {
-			cache[k] = v
-		}
+	var entry cacheEntry
+	if err := gob.NewDecoder(bytes.NewReader(val)).Decode(&entry); err != nil {
+		return cacheEntry{}, false
 	}
-	if err := enc.Encode(cache); err != nil {
-		logWithBufferf("[ERROR] Failed to encode cache: %v", err)
-		return err
-	}
-	logWithBufferf("[INFO] DNS cache saved successfully (%d entries)", len(cache))
-	return nil
+	return entry, true
 }
 
-// Load cache from disk
-func loadCacheFromDisk() error {
-	if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
-		logWithBufferf("[WARN] Cache file does not exist, skipping load")
-		return nil
-	}
-	logWithBufferf("[INFO] Loading DNS cache from disk: %s", cacheFile)
-	f, err := os.Open(cacheFile)
-	if err != nil {
-		logWithBufferf("[ERROR] Failed to open cache file: %v", err)
-		return err
-	}
-	defer f.Close()
-	dec := gob.NewDecoder(f)
-	cache := make(map[string]cacheEntry)
-	if err := dec.Decode(&cache); err != nil {
-		logWithBufferf("[ERROR] Failed to decode cache: %v", err)
-		return err
-	}
-	for k, v := range cache {
-		dnsCache.Add(k, v)
-	}
-	logWithBufferf("[INFO] DNS cache loaded successfully (%d entries)", len(cache))
-	return nil
-}
-func init() {
-	gob.Register(cacheEntry{})
-	gob.Register([]dns.RR{})
-}
-
-// Resolver with cache and stats
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
-	cacheKey := fmt.Sprintf("%s:%d", domain, qtype)
-
-	cacheStatsMutex.Lock()
-	cacheRequests++
-	cacheStatsMutex.Unlock()
-
-	if entry, ok := dnsCache.Get(cacheKey); ok {
+	key := cacheKey(domain, qtype)
+	go func() {
 		cacheStatsMutex.Lock()
-		cacheHits++
+		cacheRequests++
 		cacheStatsMutex.Unlock()
-		return entry.answers
+	}()
+	if entry, ok := loadFromValkey(key); ok {
+		go func() {
+			cacheStatsMutex.Lock()
+			cacheHits++
+			cacheStatsMutex.Unlock()
+		}()
+		return entry.Answers
 	}
 	answers := resolver(domain, qtype)
 	if answers != nil {
-		dnsCache.Add(cacheKey, cacheEntry{
-			answers: answers,
-		})
+		saveToValkey(key, cacheEntry{Answers: answers}, defaultDNSCacheTTL)
 	}
 	return answers
 }
