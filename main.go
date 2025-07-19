@@ -12,72 +12,55 @@ import (
 	"github.com/miekg/dns"
 )
 
+// --- Reusable Helpers ---
+
+func getEnvDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return def
+}
+
+func getEnvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
+	}
+	return def
+}
+
+func getEnvString(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func getEnvStringSlice(key, def string) []string {
+	if v := os.Getenv(key); v != "" {
+		parts := strings.Split(v, ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		return parts
+	}
+	return []string{def}
+}
+
+// --- Config ---
+
 var (
-	defaultCacheTTL = func() time.Duration {
-		if v := os.Getenv("CACHE_TTL"); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
-				return d
-			}
-		}
-		return 10 * time.Second
-	}()
-
-	defaultDNSTimeout = func() time.Duration {
-		if v := os.Getenv("DNS_TIMEOUT"); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
-				return d
-			}
-		}
-		return 5 * time.Second
-	}()
-
-	defaultWorkerCount = func() int {
-		if v := os.Getenv("WORKER_COUNT"); v != "" {
-			if i, err := strconv.Atoi(v); err == nil {
-				return i
-			}
-		}
-		return 5
-	}()
-
-	defaultTestDomain = func() string {
-		if v := os.Getenv("TEST_DOMAIN"); v != "" {
-			return v
-		}
-		return "google.com"
-	}()
-
-	defaultDNSPort = func() string {
-		if v := os.Getenv("DNS_PORT"); v != "" {
-			return v
-		}
-		return ":53"
-	}()
-
-	defaultUDPSize = func() int {
-		if v := os.Getenv("UDP_SIZE"); v != "" {
-			if i, err := strconv.Atoi(v); err == nil {
-				return i
-			}
-		}
-		return 65535
-	}()
-
-	defaultDNSStatslog = func() time.Duration {
-		if v := os.Getenv("DNS_STATSLOG"); v != "" {
-			if d, err := time.ParseDuration(v); err == nil {
-				return d
-			}
-		}
-		return 5 * time.Minute
-	}()
-
-	defaultDNSServer = func() string {
-		if v := os.Getenv("DEFAULT_DNS_SERVER"); v != "" {
-			return v
-		}
-		return "8.8.8.8:53"
-	}()
+	defaultCacheTTL     = getEnvDuration("CACHE_TTL", 10*time.Second)
+	defaultDNSTimeout   = getEnvDuration("DNS_TIMEOUT", 5*time.Second)
+	defaultWorkerCount  = getEnvInt("WORKER_COUNT", 5)
+	defaultTestDomain   = getEnvString("TEST_DOMAIN", "google.com")
+	defaultDNSPort      = getEnvString("DNS_PORT", ":53")
+	defaultUDPSize      = getEnvInt("UDP_SIZE", 65535)
+	defaultDNSStatslog  = getEnvDuration("DNS_STATSLOG", 5*time.Minute)
+	defaultDNSServer    = getEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
 )
 
 var (
@@ -97,7 +80,8 @@ var (
 	statsMutex    sync.Mutex
 )
 
-// Log ring buffer to keep last 500 logs
+// --- Log Ring Buffer ---
+
 type LogRingBuffer struct {
 	entries []string
 	max     int
@@ -138,39 +122,25 @@ func (l *LogRingBuffer) GetAll() []string {
 var logBuffer = NewLogRingBuffer(500)
 
 func logWithBufferf(format string, v ...interface{}) {
-	msg := format
-	if len(v) > 0 {
-		msg = sprintf(format, v...)
-	}
+	msg := fmt.Sprintf(format, v...)
 	logBuffer.Add(msg)
 	log.Printf(format, v...)
 }
 
 func logWithBufferFatalf(format string, v ...interface{}) {
-	msg := format
-	if len(v) > 0 {
-		msg = sprintf(format, v...)
-	}
+	msg := fmt.Sprintf(format, v...)
 	logBuffer.Add(msg)
 	log.Fatalf(format, v...)
 }
 
-func sprintf(format string, v ...interface{}) string {
-	return fmt.Sprintf(format, v...)
+// --- DNS Server Selection ---
+
+func getDNSServers() []string {
+	return getEnvStringSlice("DNS_SERVERS", defaultDNSServer)
 }
 
 func updateDNSServersCache() {
-	// Don't lock for the entire update process
-	env := os.Getenv("DNS_SERVERS")
-	var servers []string
-	if env == "" {
-		servers = []string{defaultDNSServer}
-	} else {
-		servers = strings.Split(env, ",")
-		for i, s := range servers {
-			servers[i] = strings.TrimSpace(s)
-		}
-	}
+	servers := getDNSServers()
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
 		logWithBufferFatalf("[ERROR] no DNS servers found")
 	}
@@ -231,6 +201,9 @@ func getCachedDNSServers() []string {
 	cacheMutex.RUnlock()
 	return servers
 }
+
+// --- DNS Usage Logger ---
+
 func startDNSUsageLogger() {
 	ticker := time.NewTicker(defaultDNSStatslog)
 	defer ticker.Stop()
@@ -240,6 +213,7 @@ func startDNSUsageLogger() {
 		statsMutex.Unlock()
 	}
 }
+
 func startDNSServerCacheUpdater() {
 	go startDNSUsageLogger()
 	// Start cache updater in background
@@ -251,6 +225,8 @@ func startDNSServerCacheUpdater() {
 		}
 	}()
 }
+
+// --- DNS Resolver ---
 
 func resolver(domain string, qtype uint16) []dns.RR {
 	m := dnsMsgPool.Get().(*dns.Msg)
@@ -276,6 +252,8 @@ func resolver(domain string, qtype uint16) []dns.RR {
 	return nil
 }
 
+// --- DNS Handler ---
+
 type dnsHandler struct{}
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
@@ -296,8 +274,9 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 }
 
+// --- Server Startup ---
+
 func StartDNSServer() {
-	// Initialize cache on startup
 	updateDNSServersCache()
 
 	handler := new(dnsHandler)
@@ -322,3 +301,4 @@ func StartDNSServer() {
 func main() {
 	StartDNSServer()
 }
+
