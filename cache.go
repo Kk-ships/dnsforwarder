@@ -16,18 +16,20 @@ type cacheEntry struct {
 }
 
 var (
-	dnsCache         = lru.NewLRU[string, cacheEntry](defaultCacheSize, nil, defaultDNSCacheTTL)
-	cacheStatsMutex  sync.Mutex
-	cacheHits        int
-	cacheRequests    int
+	dnsCache        = lru.NewLRU[string, cacheEntry](defaultCacheSize, nil, defaultDNSCacheTTL)
+	cacheStatsMutex sync.Mutex
+	cacheHits       int
+	cacheRequests   int
 )
 
 const cacheFile = "dns_cache.gob"
 
 // Save cache to disk
 func saveCacheToDisk() error {
+	logWithBufferf("[INFO] Saving DNS cache to disk: %s", cacheFile)
 	f, err := os.Create(cacheFile)
 	if err != nil {
+		logWithBufferf("[ERROR] Failed to create cache file: %v", err)
 		return err
 	}
 	defer f.Close()
@@ -38,27 +40,39 @@ func saveCacheToDisk() error {
 			cache[k] = v
 		}
 	}
-	return enc.Encode(cache)
+	if err := enc.Encode(cache); err != nil {
+		logWithBufferf("[ERROR] Failed to encode cache: %v", err)
+		return err
+	}
+	logWithBufferf("[INFO] DNS cache saved successfully (%d entries)", len(cache))
+	return nil
 }
 
 // Load cache from disk
 func loadCacheFromDisk() error {
+	if _, err := os.Stat(cacheFile); os.IsNotExist(err) {
+		logWithBufferf("[WARN] Cache file does not exist, skipping load")
+		return nil
+	}
+	logWithBufferf("[INFO] Loading DNS cache from disk: %s", cacheFile)
 	f, err := os.Open(cacheFile)
 	if err != nil {
+		logWithBufferf("[ERROR] Failed to open cache file: %v", err)
 		return err
 	}
 	defer f.Close()
 	dec := gob.NewDecoder(f)
 	cache := make(map[string]cacheEntry)
 	if err := dec.Decode(&cache); err != nil {
+		logWithBufferf("[ERROR] Failed to decode cache: %v", err)
 		return err
 	}
 	for k, v := range cache {
 		dnsCache.Add(k, v)
 	}
+	logWithBufferf("[INFO] DNS cache loaded successfully (%d entries)", len(cache))
 	return nil
 }
-
 func init() {
 	gob.Register(cacheEntry{})
 	gob.Register([]dns.RR{})

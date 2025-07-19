@@ -8,3 +8,8 @@ services:
     restart: always
     environment:
       - TZ=Asia/Kolkata
+    volumes:
+      - dns_cache_data:/app
+
+volumes:
+  dns_cache_data:
