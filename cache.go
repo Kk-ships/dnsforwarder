@@ -26,6 +26,14 @@ var (
 	redisClient     *redis.Client
 )
 
+func init() {
+	gob.Register(&dns.A{})
+	gob.Register(&dns.AAAA{})
+	gob.Register(&dns.CNAME{})
+	gob.Register(&dns.MX{})
+	gob.Register(&dns.NS{})
+	gob.Register(&dns.TXT{})
+}
 func connectToRedis() {
 	redisClient = redis.NewClient(&redis.Options{
 		Addr: defaultValKeyServer, // Change as needed
@@ -82,7 +90,10 @@ func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	}
 	answers := resolver(domain, qtype)
 	if answers != nil {
-		saveToValkey(key, cacheEntry{Answers: answers}, defaultDNSCacheTTL)
+		err := saveToValkey(key, cacheEntry{Answers: answers}, defaultDNSCacheTTL)
+		if err != nil {
+			logWithBufferf("[CACHE] Error saving to Valkey: %v", err)
+		}
 	}
 	return answers
 }
