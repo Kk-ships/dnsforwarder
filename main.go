@@ -12,31 +12,92 @@ import (
 	"github.com/miekg/dns"
 )
 
-// --- Reusable Helpers ---
+// --- Reusable Helpers with Caching ---
+
+var (
+	envDurationCache = make(map[string]time.Duration)
+	envDurationOnce  = make(map[string]*sync.Once)
+	envIntCache      = make(map[string]int)
+	envIntOnce       = make(map[string]*sync.Once)
+	envStringCache   = make(map[string]string)
+	envStringOnce    = make(map[string]*sync.Once)
+	cacheMu          sync.Mutex
+)
 
 func getEnvDuration(key string, def time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
+	cacheMu.Lock()
+	if envDurationOnce[key] == nil {
+		envDurationOnce[key] = &sync.Once{}
 	}
-	return def
+	cacheMu.Unlock()
+
+	envDurationOnce[key].Do(func() {
+		v := os.Getenv(key)
+		if v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				cacheMu.Lock()
+				envDurationCache[key] = d
+				cacheMu.Unlock()
+				return
+			}
+		}
+		cacheMu.Lock()
+		envDurationCache[key] = def
+		cacheMu.Unlock()
+	})
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	return envDurationCache[key]
 }
 
 func getEnvInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			return i
-		}
+	cacheMu.Lock()
+	if envIntOnce[key] == nil {
+		envIntOnce[key] = &sync.Once{}
 	}
-	return def
+	cacheMu.Unlock()
+
+	envIntOnce[key].Do(func() {
+		v := os.Getenv(key)
+		if v != "" {
+			if i, err := strconv.Atoi(v); err == nil {
+				cacheMu.Lock()
+				envIntCache[key] = i
+				cacheMu.Unlock()
+				return
+			}
+		}
+		cacheMu.Lock()
+		envIntCache[key] = def
+		cacheMu.Unlock()
+	})
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	return envIntCache[key]
 }
 
 func getEnvString(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+	cacheMu.Lock()
+	if envStringOnce[key] == nil {
+		envStringOnce[key] = &sync.Once{}
 	}
-	return def
+	cacheMu.Unlock()
+
+	envStringOnce[key].Do(func() {
+		v := os.Getenv(key)
+		if v != "" {
+			cacheMu.Lock()
+			envStringCache[key] = v
+			cacheMu.Unlock()
+			return
+		}
+		cacheMu.Lock()
+		envStringCache[key] = def
+		cacheMu.Unlock()
+	})
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	return envStringCache[key]
 }
 
 func getEnvStringSlice(key, def string) []string {
