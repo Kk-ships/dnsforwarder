@@ -89,12 +89,10 @@ func resolverWithCache(domain string, qtype uint16) []dns.RR {
 		return entry.Answers
 	}
 	answers := resolver(domain, qtype)
-	if answers != nil {
-		err := saveToValkey(key, cacheEntry{Answers: answers}, defaultDNSCacheTTL)
-		if err != nil {
-			logWithBufferf("[CACHE] Error saving to Valkey: %v", err)
-		}
-	}
+    err := saveToValkey(key, cacheEntry{Answers: answers}, defaultDNSCacheTTL)
+    if err != nil {
+        logWithBufferf("[CACHE] Error saving to Valkey: %v", err)
+    }
 	return answers
 }
 
