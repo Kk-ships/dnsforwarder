@@ -4,8 +4,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY main.go .
-RUN go build -o main .
-
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -buildvcs=false -tags netgo -o main .
 # Run stage
 FROM alpine:latest
 RUN apk add --no-cache tzdata
