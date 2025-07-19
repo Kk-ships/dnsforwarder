@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
+	lru "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/miekg/dns"
 )
 
@@ -301,28 +301,22 @@ type dnsHandler struct{}
 
 type cacheEntry struct {
 	answers []dns.RR
-	expiry  time.Time
 }
 
-var dnsCache, _ = lru.New[string, cacheEntry](defaultCacheSize)
+var dnsCache = lru.NewLRU[string, cacheEntry](defaultCacheSize, nil, defaultDNSCacheTTL)
 
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	cacheKey := fmt.Sprintf("%s:%d", domain, qtype)
 
 	if entry, ok := dnsCache.Get(cacheKey); ok {
-		if time.Now().Before(entry.expiry) {
-			logWithBufferf("[CACHE HIT] Domain: %s, Type: %d", domain, qtype)
-			return entry.answers
-		}
-		dnsCache.Remove(cacheKey)
+		logWithBufferf("[CACHE HIT] Domain: %s, Type: %d", domain, qtype)
+		return entry.answers
 	}
-
 	logWithBufferf("[CACHE MISS] Domain: %s, Type: %d", domain, qtype)
 	answers := resolver(domain, qtype)
 	if answers != nil {
 		dnsCache.Add(cacheKey, cacheEntry{
 			answers: answers,
-			expiry:  time.Now().Add(defaultCacheTTL),
 		})
 	}
 	return answers
@@ -347,24 +341,6 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 }
 
-// --- Cache Cleanup ---
-func startCacheCleanup() {
-	ticker := time.NewTicker(1 * time.Minute) // Adjust the interval as needed
-	go func() {
-		for range ticker.C {
-			now := time.Now()
-			for _, key := range dnsCache.Keys() { // Iterate over all cache keys
-				if entry, ok := dnsCache.Get(key); ok {
-					if now.After(entry.expiry) { // Check if the entry is expired
-						dnsCache.Remove(key) // Remove expired entry
-						logWithBufferf("[CACHE CLEANUP] Removed expired entry for key: %s", key)
-					}
-				}
-			}
-		}
-	}()
-}
-
 // --- Server Startup ---
 
 func StartDNSServer() {
@@ -382,7 +358,6 @@ func StartDNSServer() {
 	logWithBufferf("Starting DNS server on port 53")
 
 	startDNSServerCacheUpdater()
-	startCacheCleanup()
 
 	// Channel to listen for errors from ListenAndServe
 	errCh := make(chan error, 1)
