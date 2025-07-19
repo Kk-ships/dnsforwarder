@@ -86,6 +86,7 @@ var (
 	defaultUDPSize     = getEnvInt("UDP_SIZE", 65535)
 	defaultDNSStatslog = getEnvDuration("DNS_STATSLOG", 5*time.Minute)
 	defaultDNSServer   = getEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
+	defaultCacheSize   = getEnvInt("CACHE_SIZE", 10000)
 )
 
 var (
@@ -302,7 +303,7 @@ type cacheEntry struct {
 	expiry  time.Time
 }
 
-var dnsCache, _ = lru.New[string, cacheEntry](1000) // max 1000 entries
+var dnsCache, _ = lru.New[string, cacheEntry](defaultCacheSize)
 
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	cacheKey := fmt.Sprintf("%s:%d", domain, qtype)
