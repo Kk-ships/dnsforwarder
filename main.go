@@ -205,19 +205,20 @@ func updateDNSServersCache() {
 
 func getCachedDNSServers() []string {
 	cacheMutex.RLock()
-	if time.Since(cacheLastUpdated) <= cacheTTL && len(reachableServersCache) > 0 {
-		servers := make([]string, len(reachableServersCache))
-		copy(servers, reachableServersCache)
-		cacheMutex.RUnlock()
+	servers := make([]string, len(reachableServersCache))
+	copy(servers, reachableServersCache)
+	cacheValid := time.Since(cacheLastUpdated) <= cacheTTL && len(servers) > 0
+	cacheMutex.RUnlock()
+
+	if cacheValid {
 		return servers
 	}
-	cacheMutex.RUnlock()
 
 	// Update cache and try again
 	updateDNSServersCache()
 
 	cacheMutex.RLock()
-	servers := make([]string, len(reachableServersCache))
+	servers = make([]string, len(reachableServersCache))
 	copy(servers, reachableServersCache)
 	cacheMutex.RUnlock()
 	return servers
