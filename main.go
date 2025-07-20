@@ -65,21 +65,24 @@ func getEnvString(key, def string) string {
 }
 
 func getEnvStringSlice(key, def string) []string {
-	   if v := os.Getenv(key); v != "" {
-			   parts := strings.Split(v, ",")
-			   out := make([]string, 0, len(parts))
-			   for i := range parts {
-					   s := strings.TrimSpace(parts[i])
-					   if s != "" {
-							   out = append(out, s)
-					   }
-			   }
-			   return out
-	   }
-	   if def == "" {
-			   return nil
-	   }
-	   return []string{def}
+	if v := os.Getenv(key); v != "" {
+		if !strings.Contains(v, ",") {
+			return []string{strings.TrimSpace(v)}
+		}
+		parts := strings.Split(v, ",")
+		out := make([]string, 0, len(parts))
+		for i := range parts {
+			s := strings.TrimSpace(parts[i])
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	if def == "" {
+		return nil
+	}
+	return []string{def}
 }
 
 func getEnvBool(key string, def bool) bool {
@@ -130,11 +133,11 @@ var (
 	dnsClient             = &dns.Client{Timeout: defaultDNSTimeout}
 
 	// Client routing cache
-	privateServersCache  []string
-	publicServersCache   []string
-	publicOnlyClientsMap sync.Map // map[string]bool for fast lookup
-	privateServersSet    map[string]struct{}
-	publicServersSet     map[string]struct{}
+	privateServersCache      []string
+	publicServersCache       []string
+	publicOnlyClientsMap     sync.Map // map[string]bool for fast lookup
+	privateServersSet        map[string]struct{}
+	publicServersSet         map[string]struct{}
 	privateAndPublicFallback []string
 	publicServersFallback    []string
 )
@@ -263,7 +266,6 @@ func shouldUsePublicServers(clientIP string) bool {
 
 	// Check if client is in public-only list
 	if _, exists := publicOnlyClientsMap.Load(clientIP); exists {
-		logWithBufferf("[CLIENT-ROUTING] Client %s using public servers (configured)", clientIP)
 		return true
 	}
 
@@ -420,8 +422,6 @@ func updateDNSServersCache() {
 	if enableClientRouting {
 		privateServersCache = reachablePrivate
 		publicServersCache = reachablePublic
-		logWithBufferf("[CLIENT-ROUTING] Reachable private servers: %v", reachablePrivate)
-		logWithBufferf("[CLIENT-ROUTING] Reachable public servers: %v", reachablePublic)
 	}
 	cacheLastUpdated = time.Now()
 	cacheMutex.Unlock()
@@ -487,14 +487,6 @@ func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	var servers []string
 	if clientIP != "" {
 		servers = getServersForClient(clientIP)
-		if enableMetrics && len(servers) > 0 {
-			// Log which type of servers are being used
-			if shouldUsePublicServers(clientIP) {
-				logWithBufferf("[CLIENT-ROUTING] Client %s using public servers: %v", clientIP, servers)
-			} else {
-				logWithBufferf("[CLIENT-ROUTING] Client %s using private+public servers: %v", clientIP, servers)
-			}
-		}
 	} else {
 		servers = getCachedDNSServers()
 	}
@@ -515,11 +507,6 @@ func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 			if enableMetrics {
 				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
 			}
-
-			if clientIP != "" && enableClientRouting {
-				logWithBufferf("[CLIENT-ROUTING] Client %s resolved %s using server %s", clientIP, domain, svr)
-			}
-
 			return response.Answer
 		}
 
