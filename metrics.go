@@ -1,6 +1,7 @@
 package main
 
 import (
+	"dnsloadbalancer/cache"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
 	"net/http"
@@ -222,8 +223,8 @@ func StartMetricsUpdater() {
 
 			// Update cache size
 			dnsCacheMutex.Lock()
-			if dnsCache != nil {
-				items := dnsCache.Items()
+			if cache.DnsCache != nil {
+				items := cache.DnsCache.Items()
 				metricsRecorder.UpdateCacheSize(len(items))
 			}
 			dnsCacheMutex.Unlock()

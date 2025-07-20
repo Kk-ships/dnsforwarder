@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"dnsloadbalancer/cache"
+	"dnsloadbalancer/config"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
 	"os"
@@ -46,55 +47,32 @@ func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 			dnsUsageStats[svr]++
 			statsMutex.Unlock()
 
-			if enableMetrics {
+			if config.EnableMetrics {
 				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
 			}
 			return response.Answer
 		}
 
 		logutil.LogWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
-		if enableMetrics {
+		if config.EnableMetrics {
 			metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
 			metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
 		}
 	}
 
-	if enableMetrics {
+	if config.EnableMetrics {
 		metricsRecorder.RecordError("all_upstream_failed", "dns_resolution")
 	}
 	logutil.LogWithBufferFatalf("[ERROR] all DNS exchanges failed")
 	return nil
 }
 
-// --- Config ---
-var (
-	defaultCacheTTL    = util.GetEnvDuration("CACHE_TTL", 10*time.Second)
-	defaultDNSTimeout  = util.GetEnvDuration("DNS_TIMEOUT", 5*time.Second)
-	defaultWorkerCount = util.GetEnvInt("WORKER_COUNT", 5)
-	defaultTestDomain  = util.GetEnvString("TEST_DOMAIN", "google.com")
-	defaultDNSPort     = util.GetEnvString("DNS_PORT", ":53")
-	defaultUDPSize     = util.GetEnvInt("UDP_SIZE", 65535)
-	defaultDNSStatslog = util.GetEnvDuration("DNS_STATSLOG", 5*time.Minute)
-	defaultDNSServer   = util.GetEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
-	defaultCacheSize   = util.GetEnvInt("CACHE_SIZE", 10000)
-	defaultDNSCacheTTL = util.GetEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
-	defaultMetricsPort = util.GetEnvString("METRICS_PORT", ":8080")
-	enableMetrics      = util.GetEnvBool("ENABLE_METRICS", true)
-
-	// Client-based routing configuration
-	privateServers       = util.GetEnvStringSlice("PRIVATE_DNS_SERVERS", "192.168.1.1:53")       // Private DNS servers (PiHole, AdGuard, etc.)
-	publicServers        = util.GetEnvStringSlice("PUBLIC_DNS_SERVERS", "1.1.1.1:53,8.8.8.8:53") // Public DNS servers (fallback)
-	publicOnlyClients    = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", "")                     // Clients (IP) that should use public servers only
-	publicOnlyClientMACs = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENT_MACS", "")                 // Clients (MAC) that should use public servers only
-	enableClientRouting  = util.GetEnvBool("ENABLE_CLIENT_ROUTING", false)                       // Enable client-based routing
-)
-
 var (
 	reachableServersCache []string
 	cacheLastUpdated      time.Time
 	cacheMutex            sync.RWMutex
-	cacheTTL              = defaultCacheTTL
-	dnsClient             = &dns.Client{Timeout: defaultDNSTimeout}
+	cacheTTL              = config.DefaultCacheTTL
+	dnsClient             = &dns.Client{Timeout: config.DefaultDNSTimeout}
 
 	// Client routing cache
 	privateServersCache      []string
@@ -120,34 +98,34 @@ var (
 // --- Client Routing Logic ---
 
 func initializeClientRouting() {
-	if !enableClientRouting {
+	if !config.EnableClientRouting {
 		return
 	}
 
 	// Precompute sets and fallback slices
 	privateServersSet = make(map[string]struct{})
 	publicServersSet = make(map[string]struct{})
-	for _, s := range privateServers {
+	for _, s := range config.PrivateServers {
 		if s != "" {
 			privateServersSet[s] = struct{}{}
 		}
 	}
-	for _, s := range publicServers {
+	for _, s := range config.PublicServers {
 		if s != "" {
 			publicServersSet[s] = struct{}{}
 		}
 	}
-	privateAndPublicFallback = append([]string{}, privateServers...)
-	privateAndPublicFallback = append(privateAndPublicFallback, publicServers...)
-	publicServersFallback = append([]string{}, publicServers...)
+	privateAndPublicFallback = append([]string{}, config.PrivateServers...)
+	privateAndPublicFallback = append(privateAndPublicFallback, config.PublicServers...)
+	publicServersFallback = append([]string{}, config.PublicServers...)
 
-	for _, client := range publicOnlyClients {
+	for _, client := range config.PublicOnlyClients {
 		if client != "" {
 			publicOnlyClientsMap.Store(strings.TrimSpace(client), true)
 			logutil.LogWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only (IP)", client)
 		}
 	}
-	for _, mac := range publicOnlyClientMACs {
+	for _, mac := range config.PublicOnlyClientMACs {
 		macNorm := util.NormalizeMAC(mac)
 		if macNorm != "" {
 			publicOnlyClientMACsMap.Store(macNorm, true)
@@ -155,13 +133,13 @@ func initializeClientRouting() {
 		}
 	}
 
-	logutil.LogWithBufferf("[CLIENT-ROUTING] Private servers: %v", privateServers)
-	logutil.LogWithBufferf("[CLIENT-ROUTING] Public servers: %v", publicServers)
-	logutil.LogWithBufferf("[CLIENT-ROUTING] Client routing enabled: %v", enableClientRouting)
+	logutil.LogWithBufferf("[CLIENT-ROUTING] Private servers: %v", config.PrivateServers)
+	logutil.LogWithBufferf("[CLIENT-ROUTING] Public servers: %v", config.PublicServers)
+	logutil.LogWithBufferf("[CLIENT-ROUTING] Client routing enabled: %v", config.EnableClientRouting)
 }
 
 func shouldUsePublicServers(clientIP string) bool {
-	if !enableClientRouting {
+	if !config.EnableClientRouting {
 		return false
 	}
 
@@ -183,7 +161,7 @@ func shouldUsePublicServers(clientIP string) bool {
 
 func getServersForClient(clientIP string) []string {
 	// Avoid unnecessary copies, precompute fallback, and clarify lock usage
-	if !enableClientRouting {
+	if !config.EnableClientRouting {
 		return getCachedDNSServers()
 	}
 
@@ -220,7 +198,7 @@ func getServersForClient(clientIP string) []string {
 // --- DNS Server Selection ---
 
 func getDNSServers() []string {
-	return util.GetEnvStringSlice("DNS_SERVERS", defaultDNSServer)
+	return util.GetEnvStringSlice("DNS_SERVERS", config.DefaultDNSServer)
 }
 
 func updateDNSServersCache() {
@@ -231,7 +209,7 @@ func updateDNSServersCache() {
 	}
 
 	// Update total servers metric
-	if enableMetrics {
+	if config.EnableMetrics {
 		metricsRecorder.SetUpstreamServersTotal(len(servers))
 	}
 
@@ -244,9 +222,9 @@ func updateDNSServersCache() {
 	allServersToTest := make([]string, 0)
 	allServersToTest = append(allServersToTest, servers...)
 
-	if enableClientRouting {
-		allServersToTest = append(allServersToTest, privateServers...)
-		allServersToTest = append(allServersToTest, publicServers...)
+	if config.EnableClientRouting {
+		allServersToTest = append(allServersToTest, config.PrivateServers...)
+		allServersToTest = append(allServersToTest, config.PublicServers...)
 	}
 
 	// Remove duplicates
@@ -261,12 +239,12 @@ func updateDNSServersCache() {
 
 	m := dnsMsgPool.Get().(*dns.Msg)
 	defer dnsMsgPool.Put(m)
-	m.SetQuestion(dns.Fqdn(defaultTestDomain), dns.TypeA)
+	m.SetQuestion(dns.Fqdn(config.DefaultTestDomain), dns.TypeA)
 	m.RecursionDesired = true
 
 	reachableCh := make(chan result, len(uniqueServers))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, defaultWorkerCount)
+	sem := make(chan struct{}, config.DefaultWorkerCount)
 
 	for _, server := range uniqueServers {
 		wg.Add(1)
@@ -281,7 +259,7 @@ func updateDNSServersCache() {
 
 			if err != nil {
 				logutil.LogWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
-				if enableMetrics {
+				if config.EnableMetrics {
 					metricsRecorder.SetUpstreamServerReachable(svr, false)
 					metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
 					metricsRecorder.RecordError("upstream_unreachable", "health_check")
@@ -290,7 +268,7 @@ func updateDNSServersCache() {
 				return
 			}
 
-			if enableMetrics {
+			if config.EnableMetrics {
 				metricsRecorder.SetUpstreamServerReachable(svr, true)
 				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
 			}
@@ -307,7 +285,7 @@ func updateDNSServersCache() {
 	for res := range reachableCh {
 		if res.ok {
 			reachable = append(reachable, res.server)
-			if enableClientRouting {
+			if config.EnableClientRouting {
 				// Use precomputed sets for O(1) lookup
 				if _, ok := privateServersSet[res.server]; ok {
 					reachablePrivate = append(reachablePrivate, res.server)
@@ -319,13 +297,15 @@ func updateDNSServersCache() {
 	}
 
 	if len(reachable) == 0 {
-		metricsRecorder.RecordError("no_reachable_servers", "health_check")
+		if config.EnableMetrics {
+			metricsRecorder.RecordError("no_reachable_servers", "health_check")
+		}
 		logutil.LogWithBufferFatalf("[ERROR] no reachable DNS servers found")
 	}
 
 	cacheMutex.Lock()
 	reachableServersCache = reachable
-	if enableClientRouting {
+	if config.EnableClientRouting {
 		privateServersCache = reachablePrivate
 		publicServersCache = reachablePublic
 	}
@@ -357,7 +337,7 @@ func getCachedDNSServers() []string {
 // --- DNS Usage Logger ---
 
 func startDNSUsageLogger() {
-	ticker := time.NewTicker(defaultDNSStatslog)
+	ticker := time.NewTicker(config.DefaultDNSStatslog)
 	defer ticker.Stop()
 	for range ticker.C {
 		statsMutex.Lock()
@@ -401,7 +381,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-		if enableMetrics {
+		if config.EnableMetrics {
 			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
 		}
 		logutil.LogWithBufferf("[ERROR] Failed to write DNS response: %v", err)
@@ -417,33 +397,33 @@ func StartDNSServer() {
 	updateDNSServersCache()
 
 	// Initialize cache package
-	cache.Init(defaultDNSCacheTTL, enableMetrics, metricsRecorder, enableClientRouting)
+	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, metricsRecorder, config.EnableClientRouting)
 	cache.StartCacheStatsLogger()
 
 	handler := new(dnsHandler)
 	server := &dns.Server{
-		Addr:      defaultDNSPort,
+		Addr:      config.DefaultDNSPort,
 		Net:       "udp",
 		Handler:   handler,
-		UDPSize:   defaultUDPSize,
+		UDPSize:   config.DefaultUDPSize,
 		ReusePort: true,
 	}
 
 	logutil.LogWithBufferf("Starting DNS server on port 53")
-	if enableClientRouting {
+	if config.EnableClientRouting {
 		logutil.LogWithBufferf("Client-based DNS routing enabled")
-		logutil.LogWithBufferf("Private servers: %v", privateServers)
-		logutil.LogWithBufferf("Public servers: %v", publicServers)
-		logutil.LogWithBufferf("Public-only clients: %v", publicOnlyClients)
+		logutil.LogWithBufferf("Private servers: %v", config.PrivateServers)
+		logutil.LogWithBufferf("Public servers: %v", config.PublicServers)
+		logutil.LogWithBufferf("Public-only clients: %v", config.PublicOnlyClients)
 	}
 
 	startDNSServerCacheUpdater()
 
 	// Start Prometheus metrics server if enabled
-	if enableMetrics {
+	if config.EnableMetrics {
 		StartMetricsServer()
 		StartMetricsUpdater()
-		logutil.LogWithBufferf("Prometheus metrics enabled on %s/metrics", defaultMetricsPort)
+		logutil.LogWithBufferf("Prometheus metrics enabled on %s/metrics", config.DefaultMetricsPort)
 	}
 
 	// Channel to listen for errors from ListenAndServe
