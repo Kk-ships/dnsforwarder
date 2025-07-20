@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"dnsloadbalancer/logutil"
+	"dnsloadbalancer/metric"
 
 	"github.com/miekg/dns"
 	"github.com/patrickmn/go-cache"
@@ -29,22 +30,13 @@ var (
 var (
 	DefaultDNSCacheTTL  time.Duration = 30 * time.Minute
 	EnableMetrics       bool
-	MetricsRecorder     MetricsRecorderInterface
 	EnableClientRouting bool
 )
 
-type MetricsRecorderInterface interface {
-	RecordCacheHit()
-	RecordCacheMiss()
-	RecordDNSQuery(qType, status string, duration time.Duration)
-	UpdateCacheSize(size int)
-}
-
-func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, metricsRecorder MetricsRecorderInterface, enableClientRouting bool) {
+func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, enableClientRouting bool) {
 	DnsCache = cache.New(defaultDNSCacheTTL, 2*defaultDNSCacheTTL)
 	DefaultDNSCacheTTL = defaultDNSCacheTTL
 	EnableMetrics = enableMetrics
-	MetricsRecorder = metricsRecorder
 	EnableClientRouting = enableClientRouting
 }
 
@@ -83,14 +75,14 @@ func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16
 	if answers, ok := LoadFromCache(key); ok {
 		atomic.AddInt64(&cacheHits, 1)
 		if EnableMetrics {
-			MetricsRecorder.RecordCacheHit()
-			MetricsRecorder.RecordDNSQuery(qTypeStr, "cached", time.Since(start))
+			metric.MetricsRecorderInstance.RecordCacheHit()
+			metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, "cached", time.Since(start))
 		}
 		return answers
 	}
 
 	if EnableMetrics {
-		MetricsRecorder.RecordCacheMiss()
+		metric.MetricsRecorderInstance.RecordCacheMiss()
 	}
 
 	var answers []dns.RR
@@ -105,7 +97,7 @@ func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16
 		status = "nxdomain"
 		go SaveToCache(key, answers, DefaultDNSCacheTTL/negativeResponseTTLDivisor)
 		if EnableMetrics {
-			MetricsRecorder.RecordDNSQuery(qTypeStr, status, time.Since(start))
+			metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 		}
 		return answers
 	}
@@ -150,7 +142,7 @@ func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16
 	go SaveToCache(key, answers, ttl)
 
 	if EnableMetrics {
-		MetricsRecorder.RecordDNSQuery(qTypeStr, status, time.Since(start))
+		metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 	}
 	return answers
 }
@@ -176,7 +168,7 @@ func StartCacheStatsLogger() {
 				} else {
 					logutil.LogWithBufferf("[CACHE STATS] Cache Entries: %d", itemCount)
 					if EnableMetrics {
-						MetricsRecorder.UpdateCacheSize(itemCount)
+						metric.MetricsRecorderInstance.UpdateCacheSize(itemCount)
 					}
 				}
 			}
