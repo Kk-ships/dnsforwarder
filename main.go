@@ -65,14 +65,21 @@ func getEnvString(key, def string) string {
 }
 
 func getEnvStringSlice(key, def string) []string {
-	if v := os.Getenv(key); v != "" {
-		parts := strings.Split(v, ",")
-		for i := range parts {
-			parts[i] = strings.TrimSpace(parts[i])
-		}
-		return parts
-	}
-	return []string{def}
+	   if v := os.Getenv(key); v != "" {
+			   parts := strings.Split(v, ",")
+			   out := make([]string, 0, len(parts))
+			   for i := range parts {
+					   s := strings.TrimSpace(parts[i])
+					   if s != "" {
+							   out = append(out, s)
+					   }
+			   }
+			   return out
+	   }
+	   if def == "" {
+			   return nil
+	   }
+	   return []string{def}
 }
 
 func getEnvBool(key string, def bool) bool {
@@ -126,6 +133,10 @@ var (
 	privateServersCache  []string
 	publicServersCache   []string
 	publicOnlyClientsMap sync.Map // map[string]bool for fast lookup
+	privateServersSet    map[string]struct{}
+	publicServersSet     map[string]struct{}
+	privateAndPublicFallback []string
+	publicServersFallback    []string
 )
 
 var dnsMsgPool = sync.Pool{
@@ -198,7 +209,23 @@ func initializeClientRouting() {
 		return
 	}
 
-	// Initialize public-only clients map for fast lookup
+	// Precompute sets and fallback slices
+	privateServersSet = make(map[string]struct{})
+	publicServersSet = make(map[string]struct{})
+	for _, s := range privateServers {
+		if s != "" {
+			privateServersSet[s] = struct{}{}
+		}
+	}
+	for _, s := range publicServers {
+		if s != "" {
+			publicServersSet[s] = struct{}{}
+		}
+	}
+	privateAndPublicFallback = append([]string{}, privateServers...)
+	privateAndPublicFallback = append(privateAndPublicFallback, publicServers...)
+	publicServersFallback = append([]string{}, publicServers...)
+
 	for _, client := range publicOnlyClients {
 		if client != "" {
 			publicOnlyClientsMap.Store(strings.TrimSpace(client), true)
@@ -212,13 +239,21 @@ func initializeClientRouting() {
 }
 
 func getClientIP(w dns.ResponseWriter) string {
-	if udpAddr, ok := w.RemoteAddr().(*net.UDPAddr); ok {
-		return udpAddr.IP.String()
+	// Parse once, handle both UDP and TCP
+	addr := w.RemoteAddr()
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		return a.IP.String()
+	case *net.TCPAddr:
+		return a.IP.String()
+	default:
+		// fallback: parse string
+		s := addr.String()
+		if i := strings.LastIndex(s, ":"); i > 0 {
+			return s[:i]
+		}
+		return s
 	}
-	if tcpAddr, ok := w.RemoteAddr().(*net.TCPAddr); ok {
-		return tcpAddr.IP.String()
-	}
-	return ""
 }
 
 func shouldUsePublicServers(clientIP string) bool {
@@ -236,42 +271,38 @@ func shouldUsePublicServers(clientIP string) bool {
 }
 
 func getServersForClient(clientIP string) []string {
+	// Avoid unnecessary copies, precompute fallback, and clarify lock usage
 	if !enableClientRouting {
-		return getCachedDNSServers() // Fallback to original behavior
+		return getCachedDNSServers()
 	}
 
+	// Use precomputed maps for lookup
 	if shouldUsePublicServers(clientIP) {
 		cacheMutex.RLock()
-		servers := make([]string, len(publicServersCache))
-		copy(servers, publicServersCache)
+		servers := publicServersCache
 		cacheMutex.RUnlock()
-
 		if len(servers) > 0 {
 			return servers
 		}
-		// Fallback to public servers if cache is empty
-		return publicServers
+		return publicServersFallback
 	}
 
-	// Use private servers with public as fallback
 	cacheMutex.RLock()
-	privateAvailable := make([]string, len(privateServersCache))
-	copy(privateAvailable, privateServersCache)
-	publicAvailable := make([]string, len(publicServersCache))
-	copy(publicAvailable, publicServersCache)
+	priv := privateServersCache
+	pub := publicServersCache
 	cacheMutex.RUnlock()
-
-	// Combine private and public servers (private first, then public as fallback)
-	servers := make([]string, 0, len(privateAvailable)+len(publicAvailable))
-	servers = append(servers, privateAvailable...)
-	servers = append(servers, publicAvailable...)
-
-	if len(servers) == 0 {
-		// Ultimate fallback to configured servers
-		servers = append(servers, privateServers...)
-		servers = append(servers, publicServers...)
+	if len(priv) == 0 && len(pub) == 0 {
+		return privateAndPublicFallback
 	}
-
+	if len(pub) == 0 {
+		return priv
+	}
+	if len(priv) == 0 {
+		return pub
+	}
+	servers := make([]string, 0, len(priv)+len(pub))
+	servers = append(servers, priv...)
+	servers = append(servers, pub...)
 	return servers
 }
 
@@ -368,26 +399,12 @@ func updateDNSServersCache() {
 	for res := range reachableCh {
 		if res.ok {
 			reachable = append(reachable, res.server)
-
 			if enableClientRouting {
-				// Categorize reachable servers
-				isPrivate := false
-
-				for _, ps := range privateServers {
-					if res.server == ps {
-						reachablePrivate = append(reachablePrivate, res.server)
-						isPrivate = true
-						break
-					}
-				}
-
-				if !isPrivate {
-					for _, ps := range publicServers {
-						if res.server == ps {
-							reachablePublic = append(reachablePublic, res.server)
-							break
-						}
-					}
+				// Use precomputed sets for O(1) lookup
+				if _, ok := privateServersSet[res.server]; ok {
+					reachablePrivate = append(reachablePrivate, res.server)
+				} else if _, ok := publicServersSet[res.server]; ok {
+					reachablePublic = append(reachablePublic, res.server)
 				}
 			}
 		}
