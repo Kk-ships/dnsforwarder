@@ -1,6 +1,7 @@
 package main
 
 import (
+	"dnsloadbalancer/logutil"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -231,8 +232,8 @@ func StartMetricsUpdater() {
 		}
 	}()
 
-	logWithBufferf("Metrics updater started, update interval: %v", metricsUpdateInterval)
-	logWithBufferf("Server start time: %v", startTime)
+	logutil.LogWithBufferf("Metrics updater started, update interval: %v", metricsUpdateInterval)
+	logutil.LogWithBufferf("Server start time: %v", startTime)
 }
 
 // StartMetricsServer starts the Prometheus metrics HTTP server
@@ -262,9 +263,9 @@ func StartMetricsServer() {
 	}
 
 	go func() {
-		logWithBufferf("Starting Prometheus metrics server on %s%s", metricsPort, metricsPath)
+		logutil.LogWithBufferf("Starting Prometheus metrics server on %s%s", metricsPort, metricsPath)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logWithBufferf("[ERROR] Metrics server failed to start: %v", err)
+			logutil.LogWithBufferf("[ERROR] Metrics server failed to start: %v", err)
 		}
 	}()
 }
@@ -291,6 +292,6 @@ func logMetricsSummary() {
 		hitRate = float64(hits) / float64(hits+misses) * 100
 	}
 
-	logWithBufferf("[METRICS] Queries: %d, Cache hits: %d (%.2f%%), Upstream: %d, Errors: %d",
+	logutil.LogWithBufferf("[METRICS] Queries: %d, Cache hits: %d (%.2f%%), Upstream: %d, Errors: %d",
 		queries, hits, hitRate, upstreamQueries, errors)
 }

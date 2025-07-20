@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
+	"dnsloadbalancer/logutil"
 	"net"
 	"os"
 	"os/signal"
@@ -152,59 +151,6 @@ var (
 	statsMutex    sync.Mutex
 )
 
-// --- Log Ring Buffer ---
-
-type LogRingBuffer struct {
-	entries []string
-	max     int
-	idx     int
-	full    bool
-	sync.Mutex
-}
-
-func NewLogRingBuffer(size int) *LogRingBuffer {
-	return &LogRingBuffer{
-		entries: make([]string, size),
-		max:     size,
-	}
-}
-
-func (l *LogRingBuffer) Add(entry string) {
-	l.Lock()
-	defer l.Unlock()
-	l.entries[l.idx] = entry
-	l.idx = (l.idx + 1) % l.max
-	if l.idx == 0 {
-		l.full = true
-	}
-}
-
-func (l *LogRingBuffer) GetAll() []string {
-	l.Lock()
-	defer l.Unlock()
-	if !l.full {
-		return l.entries[:l.idx]
-	}
-	result := make([]string, l.max)
-	copy(result, l.entries[l.idx:])
-	copy(result[l.max-l.idx:], l.entries[:l.idx])
-	return result
-}
-
-var logBuffer = NewLogRingBuffer(500)
-
-func logWithBufferf(format string, v ...interface{}) {
-	msg := fmt.Sprintf(format, v...)
-	logBuffer.Add(msg)
-	log.Printf(format, v...)
-}
-
-func logWithBufferFatalf(format string, v ...interface{}) {
-	msg := fmt.Sprintf(format, v...)
-	logBuffer.Add(msg)
-	log.Fatalf(format, v...)
-}
-
 // --- Client Routing Logic ---
 
 func initializeClientRouting() {
@@ -232,13 +178,13 @@ func initializeClientRouting() {
 	for _, client := range publicOnlyClients {
 		if client != "" {
 			publicOnlyClientsMap.Store(strings.TrimSpace(client), true)
-			logWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only", client)
+			logutil.LogWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only", client)
 		}
 	}
 
-	logWithBufferf("[CLIENT-ROUTING] Private servers: %v", privateServers)
-	logWithBufferf("[CLIENT-ROUTING] Public servers: %v", publicServers)
-	logWithBufferf("[CLIENT-ROUTING] Client routing enabled: %v", enableClientRouting)
+	logutil.LogWithBufferf("[CLIENT-ROUTING] Private servers: %v", privateServers)
+	logutil.LogWithBufferf("[CLIENT-ROUTING] Public servers: %v", publicServers)
+	logutil.LogWithBufferf("[CLIENT-ROUTING] Client routing enabled: %v", enableClientRouting)
 }
 
 func getClientIP(w dns.ResponseWriter) string {
@@ -318,7 +264,7 @@ func updateDNSServersCache() {
 	servers := getDNSServers()
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
 		metricsRecorder.RecordError("no_dns_servers", "config")
-		logWithBufferFatalf("[ERROR] no DNS servers found")
+		logutil.LogWithBufferFatalf("[ERROR] no DNS servers found")
 	}
 
 	// Update total servers metric
@@ -371,7 +317,7 @@ func updateDNSServersCache() {
 			duration := time.Since(start)
 
 			if err != nil {
-				logWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
+				logutil.LogWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
 				if enableMetrics {
 					metricsRecorder.SetUpstreamServerReachable(svr, false)
 					metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
@@ -414,7 +360,7 @@ func updateDNSServersCache() {
 
 	if len(reachable) == 0 {
 		metricsRecorder.RecordError("no_reachable_servers", "health_check")
-		logWithBufferFatalf("[ERROR] no reachable DNS servers found")
+		logutil.LogWithBufferFatalf("[ERROR] no reachable DNS servers found")
 	}
 
 	cacheMutex.Lock()
@@ -455,7 +401,7 @@ func startDNSUsageLogger() {
 	defer ticker.Stop()
 	for range ticker.C {
 		statsMutex.Lock()
-		logWithBufferf("DNS Usage Stats: %+v", dnsUsageStats)
+		logutil.LogWithBufferf("DNS Usage Stats: %+v", dnsUsageStats)
 		statsMutex.Unlock()
 	}
 }
@@ -510,7 +456,7 @@ func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 			return response.Answer
 		}
 
-		logWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
+		logutil.LogWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
 		if enableMetrics {
 			metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
 			metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
@@ -520,7 +466,7 @@ func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	if enableMetrics {
 		metricsRecorder.RecordError("all_upstream_failed", "dns_resolution")
 	}
-	logWithBufferFatalf("[ERROR] all DNS exchanges failed")
+	logutil.LogWithBufferFatalf("[ERROR] all DNS exchanges failed")
 	return nil
 }
 
@@ -554,7 +500,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if enableMetrics {
 			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
 		}
-		logWithBufferf("[ERROR] Failed to write DNS response: %v", err)
+		logutil.LogWithBufferf("[ERROR] Failed to write DNS response: %v", err)
 	}
 }
 
@@ -575,12 +521,12 @@ func StartDNSServer() {
 		ReusePort: true,
 	}
 
-	logWithBufferf("Starting DNS server on port 53")
+	logutil.LogWithBufferf("Starting DNS server on port 53")
 	if enableClientRouting {
-		logWithBufferf("Client-based DNS routing enabled")
-		logWithBufferf("Private servers: %v", privateServers)
-		logWithBufferf("Public servers: %v", publicServers)
-		logWithBufferf("Public-only clients: %v", publicOnlyClients)
+		logutil.LogWithBufferf("Client-based DNS routing enabled")
+		logutil.LogWithBufferf("Private servers: %v", privateServers)
+		logutil.LogWithBufferf("Public servers: %v", publicServers)
+		logutil.LogWithBufferf("Public-only clients: %v", publicOnlyClients)
 	}
 
 	startDNSServerCacheUpdater()
@@ -590,7 +536,7 @@ func StartDNSServer() {
 	if enableMetrics {
 		StartMetricsServer()
 		StartMetricsUpdater()
-		logWithBufferf("Prometheus metrics enabled on %s/metrics", defaultMetricsPort)
+		logutil.LogWithBufferf("Prometheus metrics enabled on %s/metrics", defaultMetricsPort)
 	}
 
 	// Channel to listen for errors from ListenAndServe
@@ -605,17 +551,17 @@ func StartDNSServer() {
 
 	select {
 	case sig := <-sigCh:
-		logWithBufferf("Received signal %s, shutting down DNS server gracefully...", sig)
+		logutil.LogWithBufferf("Received signal %s, shutting down DNS server gracefully...", sig)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.ShutdownContext(ctx); err != nil {
-			logWithBufferf("[ERROR] Graceful shutdown failed: %v", err)
+			logutil.LogWithBufferf("[ERROR] Graceful shutdown failed: %v", err)
 		} else {
-			logWithBufferf("DNS server shut down gracefully")
+			logutil.LogWithBufferf("DNS server shut down gracefully")
 		}
 	case err := <-errCh:
 		if err != nil {
-			logWithBufferFatalf("Failed to start server: %s\n", err.Error())
+			logutil.LogWithBufferFatalf("Failed to start server: %s\n", err.Error())
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"dnsloadbalancer/logutil"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -170,7 +171,7 @@ func startCacheStatsLogger() {
 				hitPct = (float64(hits) / float64(requests)) * 100
 			}
 
-			logWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
+			logutil.LogWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
 				requests, hits, hitPct, 100-hitPct)
 
 			// Get cache size efficiently
@@ -178,10 +179,9 @@ func startCacheStatsLogger() {
 				items := dnsCache.Items()
 				itemCount := len(items)
 				if itemCount == 0 {
-					logWithBufferf("[CACHE STATS] No cache entries found")
+					logutil.LogWithBufferf("[CACHE STATS] No cache entries found")
 				} else {
-					logWithBufferf("[CACHE STATS] Cache Entries: %d", itemCount)
-
+					logutil.LogWithBufferf("[CACHE STATS] Cache Entries: %d", itemCount)
 					// Update metrics if enabled
 					if enableMetrics {
 						metricsRecorder.UpdateCacheSize(itemCount)
