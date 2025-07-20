@@ -2,12 +2,15 @@ package util
 
 import (
 	"bytes"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 var (
@@ -144,4 +147,20 @@ func GetMACFromARP(ip string) string {
 		}
 	}
 	return ""
+}
+
+func GetClientIP(w dns.ResponseWriter) string {
+	addr := w.RemoteAddr()
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		return a.IP.String()
+	case *net.TCPAddr:
+		return a.IP.String()
+	default:
+		s := addr.String()
+		if i := strings.LastIndex(s, ":"); i > 0 {
+			return s[:i]
+		}
+		return s
+	}
 }

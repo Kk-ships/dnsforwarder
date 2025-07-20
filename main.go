@@ -5,7 +5,6 @@ import (
 	"dnsloadbalancer/cache"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
-	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -159,24 +158,6 @@ func initializeClientRouting() {
 	logutil.LogWithBufferf("[CLIENT-ROUTING] Private servers: %v", privateServers)
 	logutil.LogWithBufferf("[CLIENT-ROUTING] Public servers: %v", publicServers)
 	logutil.LogWithBufferf("[CLIENT-ROUTING] Client routing enabled: %v", enableClientRouting)
-}
-
-func getClientIP(w dns.ResponseWriter) string {
-	// Parse once, handle both UDP and TCP
-	addr := w.RemoteAddr()
-	switch a := addr.(type) {
-	case *net.UDPAddr:
-		return a.IP.String()
-	case *net.TCPAddr:
-		return a.IP.String()
-	default:
-		// fallback: parse string
-		s := addr.String()
-		if i := strings.LastIndex(s, ":"); i > 0 {
-			return s[:i]
-		}
-		return s
-	}
 }
 
 func shouldUsePublicServers(clientIP string) bool {
@@ -409,8 +390,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	if len(r.Question) > 0 {
 		q := r.Question[0]
-		clientIP := getClientIP(w)
-
+		clientIP := util.GetClientIP(w)
 		answers := cache.ResolverWithCache(
 			q.Name, q.Qtype,
 			resolver, resolverForClient, clientIP,
