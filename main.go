@@ -74,6 +74,22 @@ func getEnvStringSlice(key, def string) []string {
 	return []string{def}
 }
 
+func getEnvBool(key string, def bool) bool {
+	if v, ok := envStringCache.Load(key); ok {
+		return v.(string) == "true"
+	}
+	val := def
+	if s := os.Getenv(key); s != "" {
+		if s == "true" || s == "1" {
+			val = true
+		} else if s == "false" || s == "0" {
+			val = false
+		}
+	}
+	envStringCache.Store(key, strconv.FormatBool(val))
+	return val
+}
+
 // --- Config ---
 
 var (
@@ -88,7 +104,7 @@ var (
 	defaultCacheSize   = getEnvInt("CACHE_SIZE", 10000)
 	defaultDNSCacheTTL = getEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
 	defaultMetricsPort = getEnvString("METRICS_PORT", ":8080")
-	enableMetrics      = getEnvString("ENABLE_METRICS", "true") == "true"
+	enableMetrics      = getEnvBool("ENABLE_METRICS", true)
 )
 
 var (

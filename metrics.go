@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -118,15 +119,19 @@ var (
 
 // Metrics aggregates for efficient atomic operations
 var (
-	metricsUpdateInterval = getEnvDuration("METRICS_UPDATE_INTERVAL", 30*time.Second)
+	metricsUpdateInterval time.Duration
 	totalQueries          int64
 	totalCacheHits        int64
 	totalCacheMisses      int64
 	totalUpstreamQueries  int64
 	totalErrors           int64
+
+	// Mutex for synchronizing access to the DNS cache
+	dnsCacheMutex sync.Mutex
 )
 
 func init() {
+	metricsUpdateInterval = getEnvDuration("METRICS_UPDATE_INTERVAL", 30*time.Second)
 	// Register all metrics with Prometheus
 	prometheus.MustRegister(
 		dnsQueriesTotal,
@@ -214,10 +219,12 @@ func StartMetricsUpdater() {
 			updateSystemMetrics()
 
 			// Update cache size
+			dnsCacheMutex.Lock()
 			if dnsCache != nil {
 				items := dnsCache.Items()
 				metricsRecorder.UpdateCacheSize(len(items))
 			}
+			dnsCacheMutex.Unlock()
 
 			// Log metrics summary periodically
 			logMetricsSummary()

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
-	"sync"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -16,15 +16,13 @@ type cacheEntry struct {
 
 const aRecordInvalidAnswer = "0.0.0.0"
 const aaaRecordInvalidAnswer = "::"
+const negativeResponseTTLDivisor = 4
 
 var (
 	cacheHits     int64
 	cacheRequests int64
 	dnsCache      *cache.Cache
 )
-
-// String cache for frequent lookups
-var stringCache = sync.Map{}
 
 func init() {
 	dnsCache = cache.New(defaultDNSCacheTTL, 2*defaultDNSCacheTTL)
@@ -33,11 +31,12 @@ func init() {
 // Optimized cache key generation with string pooling
 func cacheKey(domain string, qtype uint16) string {
 	// Try to get from cache first for frequent lookups
-	cacheKeyStr := fmt.Sprintf("%s:%d", domain, qtype)
-	if cached, ok := stringCache.LoadOrStore(cacheKeyStr, cacheKeyStr); ok {
-		return cached.(string)
-	}
-	return cacheKeyStr
+	var b strings.Builder
+	b.Grow(len(domain) + 1 + 5) // 1 for ':', 5 for max uint16 digits
+	b.WriteString(domain)
+	b.WriteByte(':')
+	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
+	return b.String()
 }
 
 func saveToCache(key string, answers []dns.RR, ttl time.Duration) {
@@ -84,7 +83,7 @@ func resolverWithCache(domain string, qtype uint16) []dns.RR {
 	if len(answers) == 0 {
 		status = "nxdomain"
 		// Cache negative responses with shorter TTL
-		go saveToCache(key, answers, defaultDNSCacheTTL/4)
+		go saveToCache(key, answers, defaultDNSCacheTTL/negativeResponseTTLDivisor)
 		if enableMetrics {
 			metricsRecorder.RecordDNSQuery(qTypeStr, status, time.Since(start))
 		}
