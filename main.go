@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"dnsloadbalancer/cache"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
 	"net"
@@ -14,6 +15,57 @@ import (
 
 	"github.com/miekg/dns"
 )
+
+// --- DNS Resolver ---
+func resolver(domain string, qtype uint16) []dns.RR {
+	return resolverForClient(domain, qtype, "")
+}
+
+func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
+	m := dnsMsgPool.Get().(*dns.Msg)
+	defer dnsMsgPool.Put(m)
+	m.SetQuestion(dns.Fqdn(domain), qtype)
+	m.RecursionDesired = true
+
+	var servers []string
+	if clientIP != "" {
+		servers = getServersForClient(clientIP)
+	} else {
+		servers = getCachedDNSServers()
+	}
+
+	var response *dns.Msg
+	var err error
+
+	for _, svr := range servers {
+		start := time.Now()
+		response, _, err = dnsClient.Exchange(m, svr)
+		duration := time.Since(start)
+
+		if err == nil && response != nil {
+			statsMutex.Lock()
+			dnsUsageStats[svr]++
+			statsMutex.Unlock()
+
+			if enableMetrics {
+				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
+			}
+			return response.Answer
+		}
+
+		logutil.LogWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
+		if enableMetrics {
+			metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
+			metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
+		}
+	}
+
+	if enableMetrics {
+		metricsRecorder.RecordError("all_upstream_failed", "dns_resolution")
+	}
+	logutil.LogWithBufferFatalf("[ERROR] all DNS exchanges failed")
+	return nil
+}
 
 // --- Config ---
 var (
@@ -346,62 +398,10 @@ func startDNSServerCacheUpdater() {
 }
 
 // --- DNS Resolver ---
-
-func resolver(domain string, qtype uint16) []dns.RR {
-	return resolverForClient(domain, qtype, "")
-}
-
-func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
-	m := dnsMsgPool.Get().(*dns.Msg)
-	defer dnsMsgPool.Put(m)
-	m.SetQuestion(dns.Fqdn(domain), qtype)
-	m.RecursionDesired = true
-
-	var servers []string
-	if clientIP != "" {
-		servers = getServersForClient(clientIP)
-	} else {
-		servers = getCachedDNSServers()
-	}
-
-	var response *dns.Msg
-	var err error
-
-	for _, svr := range servers {
-		start := time.Now()
-		response, _, err = dnsClient.Exchange(m, svr)
-		duration := time.Since(start)
-
-		if err == nil && response != nil {
-			statsMutex.Lock()
-			dnsUsageStats[svr]++
-			statsMutex.Unlock()
-
-			if enableMetrics {
-				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
-			}
-			return response.Answer
-		}
-
-		logutil.LogWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
-		if enableMetrics {
-			metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
-			metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
-		}
-	}
-
-	if enableMetrics {
-		metricsRecorder.RecordError("all_upstream_failed", "dns_resolution")
-	}
-	logutil.LogWithBufferFatalf("[ERROR] all DNS exchanges failed")
-	return nil
-}
-
-// --- DNS Handler ---
+// Now provided by the cache package via dependency injection.
 
 type dnsHandler struct{}
 
-// Update the ServeDNS method to use the caching resolver
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg := new(dns.Msg)
 	msg.SetReply(r)
@@ -411,13 +411,10 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		q := r.Question[0]
 		clientIP := getClientIP(w)
 
-		var answers []dns.RR
-		if enableClientRouting && clientIP != "" {
-			answers = resolverWithCacheForClient(q.Name, q.Qtype, clientIP)
-		} else {
-			answers = resolverWithCache(q.Name, q.Qtype)
-		}
-
+		answers := cache.ResolverWithCache(
+			q.Name, q.Qtype,
+			resolver, resolverForClient, clientIP,
+		)
 		if answers != nil {
 			msg.Answer = answers
 		}
@@ -438,6 +435,10 @@ func StartDNSServer() {
 	initializeClientRouting()
 
 	updateDNSServersCache()
+
+	// Initialize cache package
+	cache.Init(defaultDNSCacheTTL, enableMetrics, metricsRecorder, enableClientRouting)
+	cache.StartCacheStatsLogger()
 
 	handler := new(dnsHandler)
 	server := &dns.Server{
