@@ -1,7 +1,9 @@
 package util
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,4 +92,56 @@ func GetEnvBool(key string, def bool) bool {
 	}
 	envStringCache.Store(key, strconv.FormatBool(val))
 	return val
+}
+
+// RunCommand runs a system command and returns its output as a string.
+func RunCommand(cmd string, args []string) (string, error) {
+	c := exec.Command(cmd, args...)
+	var out bytes.Buffer
+	c.Stdout = &out
+	c.Stderr = &out
+	err := c.Run()
+	return out.String(), err
+}
+
+// NormalizeMAC returns a lower-case, colon-separated MAC address string
+func NormalizeMAC(mac string) string {
+	mac = strings.ToLower(strings.ReplaceAll(mac, "-", ":"))
+	mac = strings.ReplaceAll(mac, ".", ":")
+	mac = strings.ReplaceAll(mac, " ", "")
+	// Remove duplicate colons
+	parts := strings.Split(mac, ":")
+	var filtered []string
+	for _, p := range parts {
+		if p != "" {
+			filtered = append(filtered, p)
+		}
+	}
+	return strings.Join(filtered, ":")
+}
+
+// GetMACFromARP tries to resolve the MAC address for a given IP using the system ARP table
+func GetMACFromARP(ip string) string {
+	// Only works on Unix-like systems
+	out, err := os.ReadFile("/proc/net/arp")
+	if err == nil {
+		lines := strings.Split(string(out), "\n")
+		for _, line := range lines[1:] {
+			fields := strings.Fields(line)
+			if len(fields) >= 4 && fields[0] == ip {
+				return NormalizeMAC(fields[3])
+			}
+		}
+	}
+	// Fallback: use arp command (macOS, Linux)
+	arpOut, err := RunCommand("arp", []string{"-n", ip})
+	if err == nil {
+		// Output: ? (192.168.1.100) at 00:11:22:33:44:55 on en0 ifscope [ethernet]
+		parts := strings.Split(arpOut, " at ")
+		if len(parts) > 1 {
+			macPart := strings.Split(parts[1], " ")[0]
+			return NormalizeMAC(macPart)
+		}
+	}
+	return ""
 }

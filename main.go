@@ -33,10 +33,11 @@ var (
 	enableMetrics      = util.GetEnvBool("ENABLE_METRICS", true)
 
 	// Client-based routing configuration
-	privateServers      = util.GetEnvStringSlice("PRIVATE_DNS_SERVERS", "192.168.1.1:53")       // Private DNS servers (PiHole, AdGuard, etc.)
-	publicServers       = util.GetEnvStringSlice("PUBLIC_DNS_SERVERS", "1.1.1.1:53,8.8.8.8:53") // Public DNS servers (fallback)
-	publicOnlyClients   = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", "")                     // Clients that should use public servers only
-	enableClientRouting = util.GetEnvBool("ENABLE_CLIENT_ROUTING", false)                       // Enable client-based routing
+	privateServers       = util.GetEnvStringSlice("PRIVATE_DNS_SERVERS", "192.168.1.1:53")       // Private DNS servers (PiHole, AdGuard, etc.)
+	publicServers        = util.GetEnvStringSlice("PUBLIC_DNS_SERVERS", "1.1.1.1:53,8.8.8.8:53") // Public DNS servers (fallback)
+	publicOnlyClients    = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", "")                     // Clients (IP) that should use public servers only
+	publicOnlyClientMACs = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENT_MACS", "")                 // Clients (MAC) that should use public servers only
+	enableClientRouting  = util.GetEnvBool("ENABLE_CLIENT_ROUTING", false)                       // Enable client-based routing
 )
 
 var (
@@ -49,7 +50,8 @@ var (
 	// Client routing cache
 	privateServersCache      []string
 	publicServersCache       []string
-	publicOnlyClientsMap     sync.Map // map[string]bool for fast lookup
+	publicOnlyClientsMap     sync.Map // map[string]bool for fast lookup (IP)
+	publicOnlyClientMACsMap  sync.Map // map[string]bool for fast lookup (MAC)
 	privateServersSet        map[string]struct{}
 	publicServersSet         map[string]struct{}
 	privateAndPublicFallback []string
@@ -67,6 +69,13 @@ var (
 )
 
 // --- Client Routing Logic ---
+
+func normalizeMAC(mac string) string {
+	mac = strings.ToLower(strings.ReplaceAll(mac, "-", ":"))
+	mac = strings.ReplaceAll(mac, ".", "")
+	mac = strings.ReplaceAll(mac, " ", "")
+	return mac
+}
 
 func initializeClientRouting() {
 	if !enableClientRouting {
@@ -93,7 +102,14 @@ func initializeClientRouting() {
 	for _, client := range publicOnlyClients {
 		if client != "" {
 			publicOnlyClientsMap.Store(strings.TrimSpace(client), true)
-			logutil.LogWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only", client)
+			logutil.LogWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only (IP)", client)
+		}
+	}
+	for _, mac := range publicOnlyClientMACs {
+		macNorm := util.NormalizeMAC(mac)
+		if macNorm != "" {
+			publicOnlyClientMACsMap.Store(macNorm, true)
+			logutil.LogWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only (MAC)", macNorm)
 		}
 	}
 
@@ -125,9 +141,17 @@ func shouldUsePublicServers(clientIP string) bool {
 		return false
 	}
 
-	// Check if client is in public-only list
+	// Check if client is in public-only IP list
 	if _, exists := publicOnlyClientsMap.Load(clientIP); exists {
 		return true
+	}
+
+	// Check if client is in public-only MAC list
+	mac := util.GetMACFromARP(clientIP)
+	if mac != "" {
+		if _, exists := publicOnlyClientMACsMap.Load(mac); exists {
+			return true
+		}
 	}
 
 	return false
