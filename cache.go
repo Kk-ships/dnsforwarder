@@ -56,6 +56,10 @@ func loadFromCache(key string) ([]dns.RR, bool) {
 }
 
 func resolverWithCache(domain string, qtype uint16) []dns.RR {
+	return resolverWithCacheForClient(domain, qtype, "")
+}
+
+func resolverWithCacheForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	start := time.Now()
 	key := cacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
@@ -77,8 +81,14 @@ func resolverWithCache(domain string, qtype uint16) []dns.RR {
 		metricsRecorder.RecordCacheMiss()
 	}
 
-	// Resolve the domain
-	answers := resolver(domain, qtype)
+	// Resolve the domain with client-specific routing
+	var answers []dns.RR
+	if clientIP != "" && enableClientRouting {
+		answers = resolverForClient(domain, qtype, clientIP)
+	} else {
+		answers = resolver(domain, qtype)
+	}
+
 	status := "success"
 	if len(answers) == 0 {
 		status = "nxdomain"

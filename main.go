@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -80,9 +81,10 @@ func getEnvBool(key string, def bool) bool {
 	}
 	val := def
 	if s := os.Getenv(key); s != "" {
-		if s == "true" || s == "1" {
+		switch s {
+		case "true", "1":
 			val = true
-		} else if s == "false" || s == "0" {
+		case "false", "0":
 			val = false
 		}
 	}
@@ -105,6 +107,12 @@ var (
 	defaultDNSCacheTTL = getEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
 	defaultMetricsPort = getEnvString("METRICS_PORT", ":8080")
 	enableMetrics      = getEnvBool("ENABLE_METRICS", true)
+
+	// Client-based routing configuration
+	privateServers      = getEnvStringSlice("PRIVATE_DNS_SERVERS", "192.168.1.1:53")       // Private DNS servers (PiHole, AdGuard, etc.)
+	publicServers       = getEnvStringSlice("PUBLIC_DNS_SERVERS", "1.1.1.1:53,8.8.8.8:53") // Public DNS servers (fallback)
+	publicOnlyClients   = getEnvStringSlice("PUBLIC_ONLY_CLIENTS", "")                     // Clients that should use public servers only
+	enableClientRouting = getEnvBool("ENABLE_CLIENT_ROUTING", false)                       // Enable client-based routing
 )
 
 var (
@@ -113,6 +121,11 @@ var (
 	cacheMutex            sync.RWMutex
 	cacheTTL              = defaultCacheTTL
 	dnsClient             = &dns.Client{Timeout: defaultDNSTimeout}
+
+	// Client routing cache
+	privateServersCache  []string
+	publicServersCache   []string
+	publicOnlyClientsMap sync.Map // map[string]bool for fast lookup
 )
 
 var dnsMsgPool = sync.Pool{
@@ -178,6 +191,90 @@ func logWithBufferFatalf(format string, v ...interface{}) {
 	log.Fatalf(format, v...)
 }
 
+// --- Client Routing Logic ---
+
+func initializeClientRouting() {
+	if !enableClientRouting {
+		return
+	}
+
+	// Initialize public-only clients map for fast lookup
+	for _, client := range publicOnlyClients {
+		if client != "" {
+			publicOnlyClientsMap.Store(strings.TrimSpace(client), true)
+			logWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only", client)
+		}
+	}
+
+	logWithBufferf("[CLIENT-ROUTING] Private servers: %v", privateServers)
+	logWithBufferf("[CLIENT-ROUTING] Public servers: %v", publicServers)
+	logWithBufferf("[CLIENT-ROUTING] Client routing enabled: %v", enableClientRouting)
+}
+
+func getClientIP(w dns.ResponseWriter) string {
+	if udpAddr, ok := w.RemoteAddr().(*net.UDPAddr); ok {
+		return udpAddr.IP.String()
+	}
+	if tcpAddr, ok := w.RemoteAddr().(*net.TCPAddr); ok {
+		return tcpAddr.IP.String()
+	}
+	return ""
+}
+
+func shouldUsePublicServers(clientIP string) bool {
+	if !enableClientRouting {
+		return false
+	}
+
+	// Check if client is in public-only list
+	if _, exists := publicOnlyClientsMap.Load(clientIP); exists {
+		logWithBufferf("[CLIENT-ROUTING] Client %s using public servers (configured)", clientIP)
+		return true
+	}
+
+	return false
+}
+
+func getServersForClient(clientIP string) []string {
+	if !enableClientRouting {
+		return getCachedDNSServers() // Fallback to original behavior
+	}
+
+	if shouldUsePublicServers(clientIP) {
+		cacheMutex.RLock()
+		servers := make([]string, len(publicServersCache))
+		copy(servers, publicServersCache)
+		cacheMutex.RUnlock()
+
+		if len(servers) > 0 {
+			return servers
+		}
+		// Fallback to public servers if cache is empty
+		return publicServers
+	}
+
+	// Use private servers with public as fallback
+	cacheMutex.RLock()
+	privateAvailable := make([]string, len(privateServersCache))
+	copy(privateAvailable, privateServersCache)
+	publicAvailable := make([]string, len(publicServersCache))
+	copy(publicAvailable, publicServersCache)
+	cacheMutex.RUnlock()
+
+	// Combine private and public servers (private first, then public as fallback)
+	servers := make([]string, 0, len(privateAvailable)+len(publicAvailable))
+	servers = append(servers, privateAvailable...)
+	servers = append(servers, publicAvailable...)
+
+	if len(servers) == 0 {
+		// Ultimate fallback to configured servers
+		servers = append(servers, privateServers...)
+		servers = append(servers, publicServers...)
+	}
+
+	return servers
+}
+
 // --- DNS Server Selection ---
 
 func getDNSServers() []string {
@@ -201,16 +298,35 @@ func updateDNSServersCache() {
 		ok     bool
 	}
 
+	// Test all servers (legacy + private + public)
+	allServersToTest := make([]string, 0)
+	allServersToTest = append(allServersToTest, servers...)
+
+	if enableClientRouting {
+		allServersToTest = append(allServersToTest, privateServers...)
+		allServersToTest = append(allServersToTest, publicServers...)
+	}
+
+	// Remove duplicates
+	serverSet := make(map[string]bool)
+	uniqueServers := make([]string, 0)
+	for _, server := range allServersToTest {
+		if server != "" && !serverSet[server] {
+			serverSet[server] = true
+			uniqueServers = append(uniqueServers, server)
+		}
+	}
+
 	m := dnsMsgPool.Get().(*dns.Msg)
 	defer dnsMsgPool.Put(m)
 	m.SetQuestion(dns.Fqdn(defaultTestDomain), dns.TypeA)
 	m.RecursionDesired = true
 
-	reachableCh := make(chan result, len(servers))
+	reachableCh := make(chan result, len(uniqueServers))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, defaultWorkerCount)
 
-	for _, server := range servers {
+	for _, server := range uniqueServers {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(svr string) {
@@ -246,9 +362,34 @@ func updateDNSServersCache() {
 	}()
 
 	var reachable []string
+	var reachablePrivate []string
+	var reachablePublic []string
+
 	for res := range reachableCh {
 		if res.ok {
 			reachable = append(reachable, res.server)
+
+			if enableClientRouting {
+				// Categorize reachable servers
+				isPrivate := false
+
+				for _, ps := range privateServers {
+					if res.server == ps {
+						reachablePrivate = append(reachablePrivate, res.server)
+						isPrivate = true
+						break
+					}
+				}
+
+				if !isPrivate {
+					for _, ps := range publicServers {
+						if res.server == ps {
+							reachablePublic = append(reachablePublic, res.server)
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -259,6 +400,12 @@ func updateDNSServersCache() {
 
 	cacheMutex.Lock()
 	reachableServersCache = reachable
+	if enableClientRouting {
+		privateServersCache = reachablePrivate
+		publicServersCache = reachablePublic
+		logWithBufferf("[CLIENT-ROUTING] Reachable private servers: %v", reachablePrivate)
+		logWithBufferf("[CLIENT-ROUTING] Reachable public servers: %v", reachablePublic)
+	}
 	cacheLastUpdated = time.Now()
 	cacheMutex.Unlock()
 }
@@ -311,12 +458,30 @@ func startDNSServerCacheUpdater() {
 // --- DNS Resolver ---
 
 func resolver(domain string, qtype uint16) []dns.RR {
+	return resolverForClient(domain, qtype, "")
+}
+
+func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := dnsMsgPool.Get().(*dns.Msg)
 	defer dnsMsgPool.Put(m)
 	m.SetQuestion(dns.Fqdn(domain), qtype)
 	m.RecursionDesired = true
 
-	servers := getCachedDNSServers()
+	var servers []string
+	if clientIP != "" {
+		servers = getServersForClient(clientIP)
+		if enableMetrics && len(servers) > 0 {
+			// Log which type of servers are being used
+			if shouldUsePublicServers(clientIP) {
+				logWithBufferf("[CLIENT-ROUTING] Client %s using public servers: %v", clientIP, servers)
+			} else {
+				logWithBufferf("[CLIENT-ROUTING] Client %s using private+public servers: %v", clientIP, servers)
+			}
+		}
+	} else {
+		servers = getCachedDNSServers()
+	}
+
 	var response *dns.Msg
 	var err error
 
@@ -333,6 +498,11 @@ func resolver(domain string, qtype uint16) []dns.RR {
 			if enableMetrics {
 				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
 			}
+
+			if clientIP != "" && enableClientRouting {
+				logWithBufferf("[CLIENT-ROUTING] Client %s resolved %s using server %s", clientIP, domain, svr)
+			}
+
 			return response.Answer
 		}
 
@@ -362,7 +532,15 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	if len(r.Question) > 0 {
 		q := r.Question[0]
-		answers := resolverWithCache(q.Name, q.Qtype)
+		clientIP := getClientIP(w)
+
+		var answers []dns.RR
+		if enableClientRouting && clientIP != "" {
+			answers = resolverWithCacheForClient(q.Name, q.Qtype, clientIP)
+		} else {
+			answers = resolverWithCache(q.Name, q.Qtype)
+		}
+
 		if answers != nil {
 			msg.Answer = answers
 		}
@@ -379,6 +557,9 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 // --- Server Startup ---
 
 func StartDNSServer() {
+	// Initialize client routing configuration
+	initializeClientRouting()
+
 	updateDNSServersCache()
 
 	handler := new(dnsHandler)
@@ -391,6 +572,12 @@ func StartDNSServer() {
 	}
 
 	logWithBufferf("Starting DNS server on port 53")
+	if enableClientRouting {
+		logWithBufferf("Client-based DNS routing enabled")
+		logWithBufferf("Private servers: %v", privateServers)
+		logWithBufferf("Public servers: %v", publicServers)
+		logWithBufferf("Public-only clients: %v", publicOnlyClients)
+	}
 
 	startDNSServerCacheUpdater()
 	startCacheStatsLogger()
