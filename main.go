@@ -469,7 +469,6 @@ func StartDNSServer() {
 	}
 
 	startDNSServerCacheUpdater()
-	startCacheStatsLogger()
 
 	// Start Prometheus metrics server if enabled
 	if enableMetrics {
