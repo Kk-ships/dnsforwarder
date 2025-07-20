@@ -87,6 +87,8 @@ var (
 	defaultDNSServer   = getEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
 	defaultCacheSize   = getEnvInt("CACHE_SIZE", 10000)
 	defaultDNSCacheTTL = getEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
+	defaultMetricsPort = getEnvString("METRICS_PORT", ":8080")
+	enableMetrics      = getEnvString("ENABLE_METRICS", "true") == "true"
 )
 
 var (
@@ -169,7 +171,13 @@ func getDNSServers() []string {
 func updateDNSServersCache() {
 	servers := getDNSServers()
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
+		metricsRecorder.RecordError("no_dns_servers", "config")
 		logWithBufferFatalf("[ERROR] no DNS servers found")
+	}
+
+	// Update total servers metric
+	if enableMetrics {
+		metricsRecorder.SetUpstreamServersTotal(len(servers))
 	}
 
 	type result struct {
@@ -192,11 +200,25 @@ func updateDNSServersCache() {
 		go func(svr string) {
 			defer wg.Done()
 			defer func() { <-sem }()
+
+			start := time.Now()
 			_, _, err := dnsClient.Exchange(m.Copy(), svr)
+			duration := time.Since(start)
+
 			if err != nil {
 				logWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
+				if enableMetrics {
+					metricsRecorder.SetUpstreamServerReachable(svr, false)
+					metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
+					metricsRecorder.RecordError("upstream_unreachable", "health_check")
+				}
 				reachableCh <- result{server: svr, ok: false}
 				return
+			}
+
+			if enableMetrics {
+				metricsRecorder.SetUpstreamServerReachable(svr, true)
+				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
 			}
 			reachableCh <- result{server: svr, ok: true}
 		}(server)
@@ -215,6 +237,7 @@ func updateDNSServersCache() {
 	}
 
 	if len(reachable) == 0 {
+		metricsRecorder.RecordError("no_reachable_servers", "health_check")
 		logWithBufferFatalf("[ERROR] no reachable DNS servers found")
 	}
 
@@ -282,14 +305,30 @@ func resolver(domain string, qtype uint16) []dns.RR {
 	var err error
 
 	for _, svr := range servers {
+		start := time.Now()
 		response, _, err = dnsClient.Exchange(m, svr)
+		duration := time.Since(start)
+
 		if err == nil && response != nil {
 			statsMutex.Lock()
 			dnsUsageStats[svr]++
 			statsMutex.Unlock()
+
+			if enableMetrics {
+				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
+			}
 			return response.Answer
 		}
+
 		logWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
+		if enableMetrics {
+			metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
+			metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
+		}
+	}
+
+	if enableMetrics {
+		metricsRecorder.RecordError("all_upstream_failed", "dns_resolution")
 	}
 	logWithBufferFatalf("[ERROR] all DNS exchanges failed")
 	return nil
@@ -314,6 +353,9 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
+		if enableMetrics {
+			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
+		}
 		logWithBufferf("[ERROR] Failed to write DNS response: %v", err)
 	}
 }
@@ -336,6 +378,13 @@ func StartDNSServer() {
 
 	startDNSServerCacheUpdater()
 	startCacheStatsLogger()
+
+	// Start Prometheus metrics server if enabled
+	if enableMetrics {
+		StartMetricsServer()
+		StartMetricsUpdater()
+		logWithBufferf("Prometheus metrics enabled on %s/metrics", defaultMetricsPort)
+	}
 
 	// Channel to listen for errors from ListenAndServe
 	errCh := make(chan error, 1)

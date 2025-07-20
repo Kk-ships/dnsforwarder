@@ -7,6 +7,7 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 - **Caching:** Uses an in-memory cache to store DNS responses, reducing latency and upstream load.
 - **Health Checks:** Periodically checks upstream DNS server reachability and only uses healthy servers.
 - **Statistics:** Logs DNS usage and cache hit/miss rates.
+- **Prometheus Metrics:** Comprehensive metrics collection for monitoring and alerting.
 - **Configurable:** All major parameters (DNS servers, cache TTL, ports, etc.) are configurable via environment variables or a `.env` file.
 - **Docker Support:** Lightweight, production-ready Docker image.
 
@@ -37,7 +38,7 @@ docker build -t dnsforwarder .
 
 #### Run the container
 ```sh
-docker run --rm -p 53:53/udp --env-file .env dnsforwarder
+docker run --rm -p 53:53/udp -p 8080:8080 --env-file .env dnsforwarder
 ```
 
 
@@ -68,6 +69,10 @@ DNS_STATSLOG=1m
 DEFAULT_DNS_SERVER=8.8.8.8:53
 CACHE_SIZE=10000
 DNS_CACHE_TTL=30m
+ENABLE_METRICS=true
+METRICS_PORT=:8080
+METRICS_PATH=/metrics
+METRICS_UPDATE_INTERVAL=30s
 ```
 
 - **DNS_SERVERS:** Comma-separated list of upstream DNS servers.
@@ -77,10 +82,51 @@ DNS_CACHE_TTL=30m
 - **DNS_PORT:** Port to listen on (default `:53`).
 - **CACHE_SIZE:** Maximum number of DNS entries to cache.
 - **DNS_CACHE_TTL:** How long to cache DNS responses.
+- **ENABLE_METRICS:** Enable Prometheus metrics (default `true`).
+- **METRICS_PORT:** Port for Prometheus metrics endpoint (default `:8080`).
+- **METRICS_PATH:** Path for metrics endpoint (default `/metrics`).
+- **METRICS_UPDATE_INTERVAL:** How often to update system metrics (default `30s`).
 
 ### 5. Logging & Stats
 - Logs are written to stdout and kept in a ring buffer for diagnostics.
 - Periodic logs show DNS usage and cache hit/miss rates.
+
+### 6. Prometheus Metrics
+When `ENABLE_METRICS=true`, the following metrics are available at `/metrics` endpoint:
+
+#### DNS Query Metrics
+- `dns_queries_total` - Total DNS queries processed (by type and status)
+- `dns_query_duration_seconds` - DNS query duration histogram
+
+#### Cache Metrics
+- `dns_cache_hits_total` - Total cache hits
+- `dns_cache_misses_total` - Total cache misses
+- `dns_cache_size` - Current cache size
+
+#### Upstream Server Metrics
+- `dns_upstream_queries_total` - Queries sent to upstream servers
+- `dns_upstream_query_duration_seconds` - Upstream query duration
+- `dns_upstream_servers_reachable` - Server reachability status
+- `dns_upstream_servers_total` - Total configured servers
+
+#### System Metrics
+- `dns_server_uptime_seconds_total` - Server uptime
+- `dns_server_memory_usage_bytes` - Memory usage
+- `dns_server_goroutines` - Active goroutines
+
+#### Health Check Endpoints
+- `/health` - Simple health check (returns "OK")
+- `/status` - JSON status response
+
+#### Example Prometheus Configuration
+```yaml
+scrape_configs:
+  - job_name: 'dns-forwarder'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+```
 
 ## License
 GNU General Public License v3.0
