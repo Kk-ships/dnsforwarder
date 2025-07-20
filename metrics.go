@@ -2,6 +2,7 @@ package main
 
 import (
 	"dnsloadbalancer/logutil"
+	"dnsloadbalancer/util"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -132,7 +133,7 @@ var (
 )
 
 func init() {
-	metricsUpdateInterval = getEnvDuration("METRICS_UPDATE_INTERVAL", 30*time.Second)
+	metricsUpdateInterval = util.GetEnvDuration("METRICS_UPDATE_INTERVAL", 30*time.Second)
 	// Register all metrics with Prometheus
 	prometheus.MustRegister(
 		dnsQueriesTotal,
@@ -238,8 +239,8 @@ func StartMetricsUpdater() {
 
 // StartMetricsServer starts the Prometheus metrics HTTP server
 func StartMetricsServer() {
-	metricsPort := getEnvString("METRICS_PORT", ":8080")
-	metricsPath := getEnvString("METRICS_PATH", "/metrics")
+	metricsPort := util.GetEnvString("METRICS_PORT", ":8080")
+	metricsPath := util.GetEnvString("METRICS_PATH", "/metrics")
 
 	mux := http.NewServeMux()
 	mux.Handle(metricsPath, promhttp.Handler())

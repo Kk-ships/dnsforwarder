@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"dnsloadbalancer/logutil"
+	"dnsloadbalancer/util"
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,111 +17,26 @@ import (
 
 // --- Reusable Helpers with Reduced Lock Contention ---
 
-var (
-	envDurationCache sync.Map // map[string]time.Duration
-	envIntCache      sync.Map // map[string]int
-	envStringCache   sync.Map // map[string]string
-)
-
-func getEnvDuration(key string, def time.Duration) time.Duration {
-	if v, ok := envDurationCache.Load(key); ok {
-		return v.(time.Duration)
-	}
-	val := def
-	if s := os.Getenv(key); s != "" {
-		if d, err := time.ParseDuration(s); err == nil {
-			val = d
-		}
-	}
-	envDurationCache.Store(key, val)
-	return val
-}
-
-func getEnvInt(key string, def int) int {
-	if v, ok := envIntCache.Load(key); ok {
-		return v.(int)
-	}
-	val := def
-	if s := os.Getenv(key); s != "" {
-		if i, err := strconv.Atoi(s); err == nil {
-			val = i
-		}
-	}
-	envIntCache.Store(key, val)
-	return val
-}
-
-func getEnvString(key, def string) string {
-	if v, ok := envStringCache.Load(key); ok {
-		return v.(string)
-	}
-	val := def
-	if s := os.Getenv(key); s != "" {
-		val = s
-	}
-	envStringCache.Store(key, val)
-	return val
-}
-
-func getEnvStringSlice(key, def string) []string {
-	if v := os.Getenv(key); v != "" {
-		if !strings.Contains(v, ",") {
-			return []string{strings.TrimSpace(v)}
-		}
-		parts := strings.Split(v, ",")
-		out := make([]string, 0, len(parts))
-		for i := range parts {
-			s := strings.TrimSpace(parts[i])
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	if def == "" {
-		return nil
-	}
-	return []string{def}
-}
-
-func getEnvBool(key string, def bool) bool {
-	if v, ok := envStringCache.Load(key); ok {
-		return v.(string) == "true"
-	}
-	val := def
-	if s := os.Getenv(key); s != "" {
-		switch s {
-		case "true", "1":
-			val = true
-		case "false", "0":
-			val = false
-		}
-	}
-	envStringCache.Store(key, strconv.FormatBool(val))
-	return val
-}
-
 // --- Config ---
-
 var (
-	defaultCacheTTL    = getEnvDuration("CACHE_TTL", 10*time.Second)
-	defaultDNSTimeout  = getEnvDuration("DNS_TIMEOUT", 5*time.Second)
-	defaultWorkerCount = getEnvInt("WORKER_COUNT", 5)
-	defaultTestDomain  = getEnvString("TEST_DOMAIN", "google.com")
-	defaultDNSPort     = getEnvString("DNS_PORT", ":53")
-	defaultUDPSize     = getEnvInt("UDP_SIZE", 65535)
-	defaultDNSStatslog = getEnvDuration("DNS_STATSLOG", 5*time.Minute)
-	defaultDNSServer   = getEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
-	defaultCacheSize   = getEnvInt("CACHE_SIZE", 10000)
-	defaultDNSCacheTTL = getEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
-	defaultMetricsPort = getEnvString("METRICS_PORT", ":8080")
-	enableMetrics      = getEnvBool("ENABLE_METRICS", true)
+	defaultCacheTTL    = util.GetEnvDuration("CACHE_TTL", 10*time.Second)
+	defaultDNSTimeout  = util.GetEnvDuration("DNS_TIMEOUT", 5*time.Second)
+	defaultWorkerCount = util.GetEnvInt("WORKER_COUNT", 5)
+	defaultTestDomain  = util.GetEnvString("TEST_DOMAIN", "google.com")
+	defaultDNSPort     = util.GetEnvString("DNS_PORT", ":53")
+	defaultUDPSize     = util.GetEnvInt("UDP_SIZE", 65535)
+	defaultDNSStatslog = util.GetEnvDuration("DNS_STATSLOG", 5*time.Minute)
+	defaultDNSServer   = util.GetEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
+	defaultCacheSize   = util.GetEnvInt("CACHE_SIZE", 10000)
+	defaultDNSCacheTTL = util.GetEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
+	defaultMetricsPort = util.GetEnvString("METRICS_PORT", ":8080")
+	enableMetrics      = util.GetEnvBool("ENABLE_METRICS", true)
 
 	// Client-based routing configuration
-	privateServers      = getEnvStringSlice("PRIVATE_DNS_SERVERS", "192.168.1.1:53")       // Private DNS servers (PiHole, AdGuard, etc.)
-	publicServers       = getEnvStringSlice("PUBLIC_DNS_SERVERS", "1.1.1.1:53,8.8.8.8:53") // Public DNS servers (fallback)
-	publicOnlyClients   = getEnvStringSlice("PUBLIC_ONLY_CLIENTS", "")                     // Clients that should use public servers only
-	enableClientRouting = getEnvBool("ENABLE_CLIENT_ROUTING", false)                       // Enable client-based routing
+	privateServers      = util.GetEnvStringSlice("PRIVATE_DNS_SERVERS", "192.168.1.1:53")       // Private DNS servers (PiHole, AdGuard, etc.)
+	publicServers       = util.GetEnvStringSlice("PUBLIC_DNS_SERVERS", "1.1.1.1:53,8.8.8.8:53") // Public DNS servers (fallback)
+	publicOnlyClients   = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", "")                     // Clients that should use public servers only
+	enableClientRouting = util.GetEnvBool("ENABLE_CLIENT_ROUTING", false)                       // Enable client-based routing
 )
 
 var (
@@ -257,7 +172,7 @@ func getServersForClient(clientIP string) []string {
 // --- DNS Server Selection ---
 
 func getDNSServers() []string {
-	return getEnvStringSlice("DNS_SERVERS", defaultDNSServer)
+	return util.GetEnvStringSlice("DNS_SERVERS", defaultDNSServer)
 }
 
 func updateDNSServersCache() {
