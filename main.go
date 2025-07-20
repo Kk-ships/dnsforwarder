@@ -15,8 +15,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-// --- Reusable Helpers with Reduced Lock Contention ---
-
 // --- Config ---
 var (
 	defaultCacheTTL    = util.GetEnvDuration("CACHE_TTL", 10*time.Second)
@@ -69,13 +67,6 @@ var (
 )
 
 // --- Client Routing Logic ---
-
-func normalizeMAC(mac string) string {
-	mac = strings.ToLower(strings.ReplaceAll(mac, "-", ":"))
-	mac = strings.ReplaceAll(mac, ".", "")
-	mac = strings.ReplaceAll(mac, " ", "")
-	return mac
-}
 
 func initializeClientRouting() {
 	if !enableClientRouting {
@@ -274,11 +265,8 @@ func updateDNSServersCache() {
 		}(server)
 	}
 
-	go func() {
-		wg.Wait()
-		close(reachableCh)
-	}()
-
+	wg.Wait()
+	close(reachableCh)
 	var reachable []string
 	var reachablePrivate []string
 	var reachablePublic []string
