@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"dnsloadbalancer/config"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/metric"
 
@@ -148,7 +149,7 @@ func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16
 }
 
 func StartCacheStatsLogger() {
-	ticker := time.NewTicker(1 * time.Minute)
+	ticker := time.NewTicker(config.DefaultDNSStatslog)
 	go func() {
 		defer ticker.Stop()
 		for range ticker.C {
