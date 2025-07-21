@@ -117,33 +117,7 @@ func getCachedDNSServers() []string {
 	return servers
 }
 
-// --- DNS Usage Logger ---
-
-func startDNSUsageLogger() {
-	ticker := time.NewTicker(config.DefaultDNSStatslog)
-	defer ticker.Stop()
-	for range ticker.C {
-		statsMutex.Lock()
-		logutil.LogWithBufferf("DNS Usage Stats: %+v", dnsUsageStats)
-		statsMutex.Unlock()
-	}
-}
-
-func startDNSServerCacheUpdater() {
-	go startDNSUsageLogger()
-	// Start cache updater in background
-	go func() {
-		ticker := time.NewTicker(cacheTTL)
-		defer ticker.Stop()
-		for range ticker.C {
-			updateDNSServersCache()
-		}
-	}()
-}
-
 // --- DNS Resolver ---
-// Now provided by the cache package via dependency injection.
-
 type dnsHandler struct{}
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
@@ -173,13 +147,20 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 // --- Server Startup ---
 func StartDNSServer() {
+	// --- Initialization ---
+	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, metricsRecorder, config.EnableClientRouting)
 	clientrouting.InitializeClientRouting()
 	updateDNSServersCache()
 
-	// Initialize cache package
-	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, metricsRecorder, config.EnableClientRouting)
-	cache.StartCacheStatsLogger()
+	// Start cache stats and metrics logging in background
+	go cache.StartCacheStatsLogger()
+	if config.EnableMetrics {
+		go StartMetricsServer()
+		go StartMetricsUpdater()
+		logutil.LogWithBufferf("Prometheus metrics enabled on %s/metrics", config.DefaultMetricsPort)
+	}
 
+	// DNS server setup
 	handler := new(dnsHandler)
 	server := &dns.Server{
 		Addr:      config.DefaultDNSPort,
@@ -189,30 +170,17 @@ func StartDNSServer() {
 		ReusePort: true,
 	}
 
-	logutil.LogWithBufferf("Starting DNS server on port 53")
+	logutil.LogWithBufferf("Starting DNS server on port 53 (UDP)")
 	if config.EnableClientRouting {
 		logutil.LogWithBufferf("Client-based DNS routing enabled")
-		logutil.LogWithBufferf("Private servers: %v", config.PrivateServers)
-		logutil.LogWithBufferf("Public servers: %v", config.PublicServers)
-		logutil.LogWithBufferf("Public-only clients: %v", config.PublicOnlyClients)
 	}
-
-	startDNSServerCacheUpdater()
-
-	// Start Prometheus metrics server if enabled
-	if config.EnableMetrics {
-		StartMetricsServer()
-		StartMetricsUpdater()
-		logutil.LogWithBufferf("Prometheus metrics enabled on %s/metrics", config.DefaultMetricsPort)
-	}
-
-	// Channel to listen for errors from ListenAndServe
+	// --- Server Execution ---
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.ListenAndServe()
 	}()
 
-	// Set up signal handling for graceful shutdown
+	// Graceful shutdown on signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
