@@ -5,6 +5,7 @@ import (
 	"dnsloadbalancer/cache"
 	"dnsloadbalancer/clientrouting"
 	"dnsloadbalancer/config"
+	"dnsloadbalancer/dnssource"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
 	"os"
@@ -16,20 +17,13 @@ import (
 	"github.com/miekg/dns"
 )
 
-var dnsMsgPool = sync.Pool{
-	New: func() interface{} {
-		return new(dns.Msg)
-	},
-}
 var (
 	dnsUsageStats = make(map[string]int)
 	statsMutex    sync.Mutex
 
-	reachableServersCache []string
-	cacheLastUpdated      time.Time
-	cacheMutex            sync.RWMutex
-	cacheTTL              = config.DefaultCacheTTL
-	dnsClient             = &dns.Client{Timeout: config.DefaultDNSTimeout}
+	cacheTTL   = config.DefaultCacheTTL
+	dnsClient  = &dns.Client{Timeout: config.DefaultDNSTimeout}
+	dnsMsgPool = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
 )
 
 // --- DNS Resolver ---
@@ -49,7 +43,7 @@ func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	// If client routing is not enabled or no specific servers are found, fallback to cached servers
 	// or default servers.
 	if config.EnableClientRouting && clientIP != "" {
-		servers = clientrouting.GetServersForClient(clientIP, &cacheMutex)
+		servers = clientrouting.GetServersForClient(clientIP, &dnssource.CacheMutex)
 		if servers == nil {
 			servers = getCachedDNSServers()
 		}
@@ -90,127 +84,24 @@ func resolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	return nil
 }
 
-// --- DNS Server Selection ---
-
-func getDNSServers() []string {
-	return util.GetEnvStringSlice("DNS_SERVERS", config.DefaultDNSServer)
-}
-
 func updateDNSServersCache() {
-	servers := getDNSServers()
-	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
-		metricsRecorder.RecordError("no_dns_servers", "config")
-		logutil.LogWithBufferFatalf("[ERROR] no DNS servers found")
-	}
-
-	// Update total servers metric
-	if config.EnableMetrics {
-		metricsRecorder.SetUpstreamServersTotal(len(servers))
-	}
-
-	type result struct {
-		server string
-		ok     bool
-	}
-
-	// Test all servers (legacy + private + public)
-	allServersToTest := make([]string, 0)
-	allServersToTest = append(allServersToTest, servers...)
-	if config.EnableClientRouting {
-		allServersToTest = append(allServersToTest, config.PrivateServers...)
-		allServersToTest = append(allServersToTest, config.PublicServers...)
-	}
-
-	// Remove duplicates
-	serverSet := make(map[string]bool)
-	uniqueServers := make([]string, 0)
-	for _, server := range allServersToTest {
-		if server != "" && !serverSet[server] {
-			serverSet[server] = true
-			uniqueServers = append(uniqueServers, server)
-		}
-	}
-
-	m := dnsMsgPool.Get().(*dns.Msg)
-	defer dnsMsgPool.Put(m)
-	m.SetQuestion(dns.Fqdn(config.DefaultTestDomain), dns.TypeA)
-	m.RecursionDesired = true
-
-	reachableCh := make(chan result, len(uniqueServers))
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, config.DefaultWorkerCount)
-
-	for _, server := range uniqueServers {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(svr string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			start := time.Now()
-			_, _, err := dnsClient.Exchange(m.Copy(), svr)
-			duration := time.Since(start)
-
-			if err != nil {
-				logutil.LogWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
-				if config.EnableMetrics {
-					metricsRecorder.SetUpstreamServerReachable(svr, false)
-					metricsRecorder.RecordUpstreamQuery(svr, "error", duration)
-					metricsRecorder.RecordError("upstream_unreachable", "health_check")
-				}
-				reachableCh <- result{server: svr, ok: false}
-				return
-			}
-
-			if config.EnableMetrics {
-				metricsRecorder.SetUpstreamServerReachable(svr, true)
-				metricsRecorder.RecordUpstreamQuery(svr, "success", duration)
-			}
-			reachableCh <- result{server: svr, ok: true}
-		}(server)
-	}
-
-	wg.Wait()
-	close(reachableCh)
-	var reachable []string
-	var reachablePrivate []string
-	var reachablePublic []string
-
-	for res := range reachableCh {
-		if res.ok {
-			reachable = append(reachable, res.server)
-			if config.EnableClientRouting {
-				if clientrouting.IsPrivateServer(res.server) {
-					reachablePrivate = append(reachablePrivate, res.server)
-				} else if clientrouting.IsPublicServer(res.server) {
-					reachablePublic = append(reachablePublic, res.server)
-				}
-			}
-		}
-	}
-
-	if len(reachable) == 0 {
-		if config.EnableMetrics {
-			metricsRecorder.RecordError("no_reachable_servers", "health_check")
-		}
-		logutil.LogWithBufferFatalf("[ERROR] no reachable DNS servers found")
-	}
-
-	cacheMutex.Lock()
-	if config.EnableClientRouting {
-		clientrouting.PrivateServersCache = reachablePrivate
-		clientrouting.PublicServersCache = reachablePublic
-	}
-	cacheLastUpdated = time.Now()
-	cacheMutex.Unlock()
+	dnssource.UpdateDNSServersCache(
+		metricsRecorder,
+		cacheTTL,
+		config.EnableClientRouting,
+		config.PrivateServers,
+		config.PublicServers,
+		dnsClient,
+		&dnsMsgPool,
+	)
 }
 
 func getCachedDNSServers() []string {
-	cacheMutex.RLock()
-	servers := make([]string, len(reachableServersCache))
-	copy(servers, reachableServersCache)
-	cacheValid := time.Since(cacheLastUpdated) <= cacheTTL && len(servers) > 0
-	cacheMutex.RUnlock()
+	dnssource.CacheMutex.RLock()
+	servers := make([]string, len(dnssource.ReachableServersCache))
+	copy(servers, dnssource.ReachableServersCache)
+	cacheValid := time.Since(dnssource.CacheLastUpdated) <= cacheTTL && len(servers) > 0
+	dnssource.CacheMutex.RUnlock()
 
 	if cacheValid {
 		return servers
@@ -219,10 +110,10 @@ func getCachedDNSServers() []string {
 	// Update cache and try again
 	updateDNSServersCache()
 
-	cacheMutex.RLock()
-	servers = make([]string, len(reachableServersCache))
-	copy(servers, reachableServersCache)
-	cacheMutex.RUnlock()
+	dnssource.CacheMutex.RLock()
+	servers = make([]string, len(dnssource.ReachableServersCache))
+	copy(servers, dnssource.ReachableServersCache)
+	dnssource.CacheMutex.RUnlock()
 	return servers
 }
 
