@@ -191,10 +191,6 @@ func StartMetricsUpdater() {
 		for range ticker.C {
 			serverUptime.Add(metricsUpdateInterval.Seconds())
 			updateSystemMetrics()
-			dnsCacheMutex.Lock()
-			// The cache size update should be called from outside the metric package to avoid import cycles.
-			dnsCacheMutex.Unlock()
-			logMetricsSummary()
 		}
 	}()
 	logutil.LogWithBufferf("Metrics updater started, update interval: %v", metricsUpdateInterval)
@@ -242,18 +238,4 @@ func GetMemoryUsage() uint64 {
 func updateSystemMetrics() {
 	goroutineCount.Set(float64(GetGoroutineCount()))
 	memoryUsage.Set(float64(GetMemoryUsage()))
-}
-
-func logMetricsSummary() {
-	queries := atomic.LoadInt64(&totalQueries)
-	hits := atomic.LoadInt64(&totalCacheHits)
-	misses := atomic.LoadInt64(&totalCacheMisses)
-	upstreamQueries := atomic.LoadInt64(&totalUpstreamQueries)
-	errors := atomic.LoadInt64(&totalErrors)
-	hitRate := float64(0)
-	if hits+misses > 0 {
-		hitRate = float64(hits) / float64(hits+misses) * 100
-	}
-	logutil.LogWithBufferf("[METRICS] Queries: %d, Cache hits: %d (%.2f%%), Upstream: %d, Errors: %d",
-		queries, hits, hitRate, upstreamQueries, errors)
 }
