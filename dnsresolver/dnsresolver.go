@@ -96,7 +96,6 @@ func upstreamDNSQuery(servers []string, m *dns.Msg) []dns.RR {
 			statsMutex.Lock()
 			dnsUsageStats[svr]++
 			statsMutex.Unlock()
-
 			if config.EnableMetrics {
 				metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
 			}

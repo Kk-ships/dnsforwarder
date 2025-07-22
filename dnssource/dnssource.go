@@ -127,7 +127,6 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	}
 
 	wg.Wait()
-	close(sem)
 
 	if len(reachable) == 0 {
 		if config.EnableMetrics {

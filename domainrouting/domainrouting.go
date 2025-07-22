@@ -25,20 +25,6 @@ func InitializeDomainRouting() {
 	logutil.LogWithBufferf("Routing table size: %d", len(RoutingTable))
 }
 
-// splitCharacter splits a string into substrings based on a delimiter.
-func splitCharacter(s string, character string) []string {
-	var substrings []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if string(s[i]) == character {
-			substrings = append(substrings, s[start:i])
-			start = i + 1
-		}
-	}
-	substrings = append(substrings, s[start:])
-	return substrings
-}
-
 func loadRoutingTable(files []string) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -62,13 +48,13 @@ func loadRoutingTable(files []string) {
 				logutil.LogWithBufferf("Error reading domain routing file %s: %v", file, err)
 				os.Exit(1)
 			}
-			lines := splitCharacter(string(fileContent), "\n")
+			lines := strings.Split(string(fileContent), "\n")
 			for _, line := range lines {
 				line = strings.TrimSpace(line)
-				if line == "" || line[0] == '#' {
+				if line != "" && line[0] == '#' {
 					continue
 				}
-				parts := splitCharacter(line, "/")
+				parts := strings.Split(line, "/")
 				if len(parts) < 3 {
 					continue
 				}
