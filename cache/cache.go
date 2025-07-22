@@ -159,15 +159,15 @@ func StartCacheStatsLogger() {
 			if requests > 0 {
 				hitPct = (float64(hits) / float64(requests)) * 100
 			}
-			logutil.LogWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
+			logutil.LogWithBufferf("Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
 				requests, hits, hitPct, 100-hitPct)
 			if DnsCache != nil {
 				items := DnsCache.Items()
 				itemCount := len(items)
 				if itemCount == 0 {
-					logutil.LogWithBufferf("[CACHE STATS] No cache entries found")
+					logutil.LogWithBufferf("No cache entries found")
 				} else {
-					logutil.LogWithBufferf("[CACHE STATS] Cache Entries: %d", itemCount)
+					logutil.LogWithBufferf("Cache Entries: %d", itemCount)
 					if EnableMetrics {
 						metric.MetricsRecorderInstance.UpdateCacheSize(itemCount)
 					}

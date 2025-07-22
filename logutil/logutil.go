@@ -6,6 +6,10 @@ import (
 	"sync"
 )
 
+func init() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+}
+
 type LogRingBuffer struct {
 	entries []string
 	max     int

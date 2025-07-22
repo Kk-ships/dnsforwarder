@@ -16,6 +16,8 @@ var (
 	DefaultDNSServer   = util.GetEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
 	DefaultCacheSize   = util.GetEnvInt("CACHE_SIZE", 10000)
 	DefaultDNSCacheTTL = util.GetEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
+
+	// Metrics configuration
 	DefaultMetricsPort = util.GetEnvString("METRICS_PORT", ":8080")
 	EnableMetrics      = util.GetEnvBool("ENABLE_METRICS", true)
 

@@ -43,20 +43,20 @@ func InitializeClientRouting() {
 	for _, client := range config.PublicOnlyClients {
 		if client != "" {
 			PublicOnlyClientsMap.Store(strings.TrimSpace(client), true)
-			logutil.LogWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only (IP)", client)
+			logutil.LogWithBufferf("Configured client %s to use public servers only (IP)", client)
 		}
 	}
 	for _, mac := range config.PublicOnlyClientMACs {
 		macNorm := util.NormalizeMAC(mac)
 		if macNorm != "" {
 			PublicOnlyClientMACsMap.Store(macNorm, true)
-			logutil.LogWithBufferf("[CLIENT-ROUTING] Configured client %s to use public servers only (MAC)", macNorm)
+			logutil.LogWithBufferf("Configured client %s to use public servers only (MAC)", macNorm)
 		}
 	}
 
-	logutil.LogWithBufferf("[CLIENT-ROUTING] Private servers: %v", config.PrivateServers)
-	logutil.LogWithBufferf("[CLIENT-ROUTING] Public servers: %v", config.PublicServers)
-	logutil.LogWithBufferf("[CLIENT-ROUTING] Client routing enabled: %v", config.EnableClientRouting)
+	logutil.LogWithBufferf("Private servers: %v", config.PrivateServers)
+	logutil.LogWithBufferf("Public servers: %v", config.PublicServers)
+	logutil.LogWithBufferf("Client routing enabled: %v", config.EnableClientRouting)
 }
 
 func ShouldUsePublicServers(clientIP string) bool {
