@@ -23,6 +23,7 @@ func InitializeClientRouting() {
 	if !config.EnableClientRouting {
 		return
 	}
+	logutil.LogWithBufferf("Client-based DNS routing enabled")
 
 	PrivateServersSet = make(map[string]struct{})
 	PublicServersSet = make(map[string]struct{})
@@ -56,7 +57,6 @@ func InitializeClientRouting() {
 
 	logutil.LogWithBufferf("Private servers: %v", config.PrivateServers)
 	logutil.LogWithBufferf("Public servers: %v", config.PublicServers)
-	logutil.LogWithBufferf("Client routing enabled: %v", config.EnableClientRouting)
 }
 
 func ShouldUsePublicServers(clientIP string) bool {
