@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"dnsloadbalancer/config"
+	"dnsloadbalancer/dnsresolver"
+	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/metric"
 
@@ -18,27 +20,22 @@ type cacheEntry struct {
 	Answers []dns.RR
 }
 
-const aRecordInvalidAnswer = "0.0.0.0"
-const aaaRecordInvalidAnswer = "::"
-const negativeResponseTTLDivisor = 4
-
 var (
-	cacheHits     int64
-	cacheRequests int64
-	DnsCache      *cache.Cache
-)
-
-var (
+	cacheHits           int64
+	cacheRequests       int64
+	DnsCache            *cache.Cache
 	DefaultDNSCacheTTL  time.Duration = 30 * time.Minute
 	EnableMetrics       bool
 	EnableClientRouting bool
+	EnableDomainRouting bool
 )
 
-func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, enableClientRouting bool) {
+func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, enableClientRouting bool, enableDomainRouting bool) {
 	DnsCache = cache.New(defaultDNSCacheTTL, 2*defaultDNSCacheTTL)
 	DefaultDNSCacheTTL = defaultDNSCacheTTL
 	EnableMetrics = enableMetrics
 	EnableClientRouting = enableClientRouting
+	EnableDomainRouting = enableDomainRouting
 }
 
 func CacheKey(domain string, qtype uint16) string {
@@ -66,7 +63,7 @@ func LoadFromCache(key string) ([]dns.RR, bool) {
 	return answers, true
 }
 
-func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16) []dns.RR, resolverForClient func(string, uint16, string) []dns.RR, clientIP string) []dns.RR {
+func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	start := time.Now()
 	key := CacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
@@ -87,16 +84,23 @@ func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16
 	}
 
 	var answers []dns.RR
-	if clientIP != "" && EnableClientRouting {
-		answers = resolverForClient(domain, qtype, clientIP)
+	var resolver func(string, uint16, string) []dns.RR
+	if EnableDomainRouting {
+		if _, ok := domainrouting.RoutingTable[domain]; ok {
+			resolver = dnsresolver.ResolverForDomain
+		} else {
+			resolver = dnsresolver.ResolverForClient
+		}
+	} else if EnableClientRouting && clientIP != "" {
+		resolver = dnsresolver.ResolverForClient
 	} else {
-		answers = resolver(domain, qtype)
+		resolver = dnsresolver.ResolverForDomain
 	}
-
+	answers = resolver(domain, qtype, clientIP)
 	status := "success"
 	if len(answers) == 0 {
 		status = "nxdomain"
-		go SaveToCache(key, answers, DefaultDNSCacheTTL/negativeResponseTTLDivisor)
+		go SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
 		if EnableMetrics {
 			metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 		}
@@ -114,11 +118,11 @@ func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16
 		}
 		switch v := rr.(type) {
 		case *dns.A:
-			if v.A.String() == aRecordInvalidAnswer {
+			if v.A.String() == config.ARecordInvalidAnswer {
 				useDefaultTTL = true
 			}
 		case *dns.AAAA:
-			if v.AAAA.String() == aaaRecordInvalidAnswer {
+			if v.AAAA.String() == config.AAAARecordInvalidAnswer {
 				useDefaultTTL = true
 			}
 		}
@@ -130,12 +134,10 @@ func ResolverWithCache(domain string, qtype uint16, resolver func(string, uint16
 	ttl := DefaultDNSCacheTTL
 	if !useDefaultTTL && minTTL > 0 {
 		ttlDuration := time.Duration(minTTL) * time.Second
-		const minCacheTTL = 30 * time.Second
-		const maxCacheTTL = 24 * time.Hour
-		if ttlDuration < minCacheTTL {
-			ttl = minCacheTTL
-		} else if ttlDuration > maxCacheTTL {
-			ttl = maxCacheTTL
+		if ttlDuration < config.MinCacheTTL {
+			ttl = config.MinCacheTTL
+		} else if ttlDuration > config.MaxCacheTTL {
+			ttl = config.MaxCacheTTL
 		} else {
 			ttl = ttlDuration
 		}
@@ -159,15 +161,15 @@ func StartCacheStatsLogger() {
 			if requests > 0 {
 				hitPct = (float64(hits) / float64(requests)) * 100
 			}
-			logutil.LogWithBufferf("[CACHE STATS] Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
+			logutil.LogWithBufferf("Requests: %d, Hits: %d, Hit Rate: %.2f%%, Miss Rate: %.2f%%",
 				requests, hits, hitPct, 100-hitPct)
 			if DnsCache != nil {
 				items := DnsCache.Items()
 				itemCount := len(items)
 				if itemCount == 0 {
-					logutil.LogWithBufferf("[CACHE STATS] No cache entries found")
+					logutil.LogWithBufferf("No cache entries found")
 				} else {
-					logutil.LogWithBufferf("[CACHE STATS] Cache Entries: %d", itemCount)
+					logutil.LogWithBufferf("Cache Entries: %d", itemCount)
 					if EnableMetrics {
 						metric.MetricsRecorderInstance.UpdateCacheSize(itemCount)
 					}

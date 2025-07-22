@@ -13,3 +13,6 @@ services:
     restart: always
     environment:
       - TZ=Asia/Kolkata
+    volumes: # optional required for custom domain routes
+      - ./domain-routes.txt:/etc/dnsforwarder/domain-routes.txt:ro
+      # Add more files as needed
