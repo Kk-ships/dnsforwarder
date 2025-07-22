@@ -27,36 +27,46 @@ func InitializeClientRouting() {
 
 	PrivateServersSet = make(map[string]struct{})
 	PublicServersSet = make(map[string]struct{})
-	for _, s := range config.PrivateServers {
-		if s != "" {
-			PrivateServersSet[s] = struct{}{}
-		}
-	}
-	for _, s := range config.PublicServers {
-		if s != "" {
-			PublicServersSet[s] = struct{}{}
-		}
-	}
-	PrivateAndPublicFallback = append([]string{}, config.PrivateServers...)
-	PrivateAndPublicFallback = append(PrivateAndPublicFallback, config.PublicServers...)
-	PublicServersFallback = append([]string{}, config.PublicServers...)
 
-	for _, client := range config.PublicOnlyClients {
-		if client != "" {
-			PublicOnlyClientsMap.Store(strings.TrimSpace(client), true)
-			logutil.LogWithBufferf("Configured client %s to use public servers only (IP)", client)
-		}
-	}
-	for _, mac := range config.PublicOnlyClientMACs {
-		macNorm := util.NormalizeMAC(mac)
-		if macNorm != "" {
-			PublicOnlyClientMACsMap.Store(macNorm, true)
-			logutil.LogWithBufferf("Configured client %s to use public servers only (MAC)", macNorm)
-		}
-	}
+	addServersToSet(config.PrivateServers, PrivateServersSet)
+	addServersToSet(config.PublicServers, PublicServersSet)
+
+	PrivateAndPublicFallback = append(config.PrivateServers, config.PublicServers...)
+	PublicServersFallback = config.PublicServers[:] // Create a copy
+
+	storeClientsToMap(config.PublicOnlyClients, &PublicOnlyClientsMap, "IP")
+	storeMACsToMap(config.PublicOnlyClientMACs, &PublicOnlyClientMACsMap)
 
 	logutil.LogWithBufferf("Private servers: %v", config.PrivateServers)
 	logutil.LogWithBufferf("Public servers: %v", config.PublicServers)
+}
+
+func addServersToSet(servers []string, set map[string]struct{}) {
+	for _, s := range servers {
+		if s != "" {
+			set[s] = struct{}{}
+		}
+	}
+}
+
+func storeClientsToMap(clients []string, m *sync.Map, clientType string) {
+	for _, client := range clients {
+		if client != "" {
+			client = strings.TrimSpace(client)
+			m.Store(client, true)
+			logutil.LogWithBufferf("Configured client %s to use public servers only (%s)", client, clientType)
+		}
+	}
+}
+
+func storeMACsToMap(macs []string, m *sync.Map) {
+	for _, mac := range macs {
+		macNorm := util.NormalizeMAC(mac)
+		if macNorm != "" {
+			m.Store(macNorm, true)
+			logutil.LogWithBufferf("Configured client %s to use public servers only (MAC)", macNorm)
+		}
+	}
 }
 
 func ShouldUsePublicServers(clientIP string) bool {
@@ -70,11 +80,9 @@ func ShouldUsePublicServers(clientIP string) bool {
 
 	mac := util.GetMACFromARP(clientIP)
 	if mac != "" {
-		if _, exists := PublicOnlyClientMACsMap.Load(mac); exists {
-			return true
-		}
+		_, exists := PublicOnlyClientMACsMap.Load(mac)
+		return exists
 	}
-
 	return false
 }
 
@@ -94,21 +102,15 @@ func GetServersForClient(clientIP string, cacheMutex *sync.RWMutex) []string {
 	}
 
 	cacheMutex.RLock()
-	priv := PrivateServersCache
-	pub := PublicServersCache
-	cacheMutex.RUnlock()
-	if len(priv) == 0 && len(pub) == 0 {
+	defer cacheMutex.RUnlock()
+
+	if len(PrivateServersCache) == 0 && len(PublicServersCache) == 0 {
 		return PrivateAndPublicFallback
 	}
-	if len(pub) == 0 {
-		return priv
-	}
-	if len(priv) == 0 {
-		return pub
-	}
-	servers := make([]string, 0, len(priv)+len(pub))
-	servers = append(servers, priv...)
-	servers = append(servers, pub...)
+
+	servers := make([]string, 0, len(PrivateServersCache)+len(PublicServersCache))
+	servers = append(servers, PrivateServersCache...)
+	servers = append(servers, PublicServersCache...)
 	return servers
 }
 
