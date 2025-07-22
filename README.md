@@ -273,3 +273,36 @@ GNU General Public License v3.0
 ## Credits
 - [miekg/dns](https://github.com/miekg/dns)
 - [patrickmn/go-cache](https://github.com/patrickmn/go-cache)
+
+### Example: Docker Compose with Domain Routing
+
+Here is a sample `docker-compose.yml` for running DNS Forwarder with domain routing support:
+
+```yaml
+docker-compose.yml
+------------------
+services:
+  app:
+    build:
+      context: .
+      args:
+        TARGETOS: linux
+        TARGETARCH: amd64
+    ports:
+      - "53:53/udp"
+      - "8080:8080" # Optional: Expose metrics on port 8080
+    env_file:
+      - .env
+    restart: always
+    environment:
+      - TZ=Asia/Kolkata
+    volumes:
+      - ./domain-routes.txt:/etc/dnsforwarder/domain-routes.txt:ro
+      # Add more files as needed
+```
+
+- Place your domain routing rules in `domain-routes.txt` in the project root.
+- The file will be available inside the container at `/etc/dnsforwarder/domain-routes.txt`.
+- Update your `.env` file to reference the correct path for `DOMAIN_ROUTING_FILES`.
+
+This setup ensures your custom domain routing configuration is available to the DNS forwarder running in Docker.
