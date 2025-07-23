@@ -53,11 +53,17 @@ func getCachedDNSServers() []string {
 	return servers
 }
 
-func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
+func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
 	m := dnsMsgPool.Get().(*dns.Msg)
-	defer dnsMsgPool.Put(m)
 	m.SetQuestion(dns.Fqdn(domain), qtype)
 	m.RecursionDesired = true
+	return m
+}
+
+func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
+	m := prepareDNSQuery(domain, qtype)
+	defer dnsMsgPool.Put(m)
+
 	var servers []string
 	// Prefer client-specific servers if clientIP is available
 	// This allows client routing to take precedence over the general server cache.
@@ -75,10 +81,9 @@ func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 }
 
 func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
-	m := dnsMsgPool.Get().(*dns.Msg)
+	m := prepareDNSQuery(domain, qtype)
 	defer dnsMsgPool.Put(m)
-	m.SetQuestion(dns.Fqdn(domain), qtype)
-	m.RecursionDesired = true
+
 	if svr, ok := domainrouting.RoutingTable[domain]; ok {
 		return upstreamDNSQuery([]string{svr}, m)
 	}
