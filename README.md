@@ -189,16 +189,18 @@ Domain routing allows you to forward DNS queries for specific domains to specifi
 - Overriding DNS for selected domains
 
 ### How It Works
-- When `ENABLE_DOMAIN_ROUTING=true` is set, the DNS forwarder loads domain routing rules from one or more configuration files specified in the `DOMAIN_ROUTING_FILES` environment variable.
+- When `ENABLE_DOMAIN_ROUTING=true` is set, the DNS forwarder loads domain routing rules from all `.txt` files in the folder specified by the `DOMAIN_ROUTING_FOLDER` environment variable.
 - Each file should contain rules in the format: `/domain/ip`, one per line. Lines starting with `#` are treated as comments.
 - When a DNS query matches a domain in the routing table, the query is forwarded to the specified IP address for that domain.
 - If no match is found, normal client or default routing is used.
+- The routing table is automatically refreshed at intervals specified by `DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL` in seconds (default: 60 seconds).
 
 ### Example Configuration
 Add to your `.env` file:
 ```
 ENABLE_DOMAIN_ROUTING=true
-DOMAIN_ROUTING_FILES=/etc/dnsforwarder/domain-routes.txt,/etc/dnsforwarder/extra-routes.txt
+DOMAIN_ROUTING_FOLDER=/etc/dnsforwarder/domain-routes
+DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
 ```
 
 Example `domain-routes.txt`:
@@ -273,14 +275,27 @@ GNU General Public License v3.0
 ## Credits
 - [miekg/dns](https://github.com/miekg/dns)
 - [patrickmn/go-cache](https://github.com/patrickmn/go-cache)
+- [prometheus/client_golang](https://github.com/prometheus/client_golang)
+- [beorn7/perks](https://github.com/beorn7/perks)
+- [cespare/xxhash](https://github.com/cespare/xxhash)
+- [klauspost/compress](https://github.com/klauspost/compress)
+- [munnerz/goautoneg](https://github.com/munnerz/goautoneg)
+- [prometheus/client_model](https://github.com/prometheus/client_model)
+- [prometheus/common](https://github.com/prometheus/common)
+- [prometheus/procfs](https://github.com/prometheus/procfs)
+- [golang.org/x/mod](https://pkg.go.dev/golang.org/x/mod)
+- [golang.org/x/net](https://pkg.go.dev/golang.org/x/net)
+- [golang.org/x/sync](https://pkg.go.dev/golang.org/x/sync)
+- [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys)
+- [golang.org/x/tools](https://pkg.go.dev/golang.org/x/tools)
+- [google.golang.org/protobuf](https://github.com/protocolbuffers/protobuf-go)
+
 
 ### Example: Docker Compose with Domain Routing
 
 Here is a sample `docker-compose.yml` for running DNS Forwarder with domain routing support:
 
 ```yaml
-docker-compose.yml
-------------------
 services:
   app:
     build:
@@ -297,12 +312,14 @@ services:
     environment:
       - TZ=Asia/Kolkata
     volumes:
-      - ./domain-routes.txt:/etc/dnsforwarder/domain-routes.txt:ro
-      # Add more files as needed
+      - ./domain-routes/:/etc/dnsforwarder/domain-routes/:ro # Mount folder as read-only (recommended)
+      # Add more folders/files as needed
 ```
 
-- Place your domain routing rules in `domain-routes.txt` in the project root.
-- The file will be available inside the container at `/etc/dnsforwarder/domain-routes.txt`.
-- Update your `.env` file to reference the correct path for `DOMAIN_ROUTING_FILES`.
+- Place your domain routing `.txt` files in the `domain-routes/` folder in the project root.
+- The folder will be available inside the container at `/etc/dnsforwarder/domain-routes/` (read-only).
+- Update your `.env` file to reference the correct path for `DOMAIN_ROUTING_FOLDER`.
+
+**Note:** Mounting the domain routing folder as read-only (`:ro`) is recommended for security and stability.
 
 This setup ensures your custom domain routing configuration is available to the DNS forwarder running in Docker.

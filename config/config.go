@@ -35,6 +35,7 @@ var (
 	EnableClientRouting  = util.GetEnvBool("ENABLE_CLIENT_ROUTING", false)
 
 	// Domain routing configuration
-	EnableDomainRouting = util.GetEnvBool("ENABLE_DOMAIN_ROUTING", false)
-	DomainRoutingFiles  = util.GetEnvStringSlice("DOMAIN_ROUTING_FILES", "")
+	EnableDomainRouting              = util.GetEnvBool("ENABLE_DOMAIN_ROUTING", false)
+	DomainRoutingFolder              = util.GetEnvString("DOMAIN_ROUTING_FOLDER", "")
+	DomainRoutingTableReloadInterval = util.GetEnvDuration("DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL", 1*time.Minute) // Interval to reload domain routing table in seconds
 )
