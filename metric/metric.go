@@ -193,8 +193,8 @@ func StartMetricsUpdater() {
 			updateSystemMetrics()
 		}
 	}()
-	logutil.LogWithBufferf("Metrics updater started, update interval: %v", metricsUpdateInterval)
-	logutil.LogWithBufferf("Server start time: %v", startTime)
+	logutil.Logger.Infof("Metrics updater started, update interval: %v", metricsUpdateInterval)
+	logutil.Logger.Infof("Server start time: %v", startTime)
 }
 
 func StartMetricsServer() {
@@ -216,9 +216,9 @@ func StartMetricsServer() {
 		Handler: mux,
 	}
 	go func() {
-		logutil.LogWithBufferf("Starting Prometheus metrics server on %s%s", metricsPort, metricsPath)
+		logutil.Logger.Infof("Starting Prometheus metrics server on %s%s", metricsPort, metricsPath)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logutil.LogWithBufferf("[ERROR] Metrics server failed to start: %v", err)
+			logutil.Logger.Errorf("Metrics server failed to start: %v", err)
 		}
 	}()
 }

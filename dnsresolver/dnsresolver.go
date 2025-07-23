@@ -13,6 +13,7 @@ import (
 	"dnsloadbalancer/metric"
 
 	"github.com/miekg/dns"
+	
 )
 
 var (
@@ -92,7 +93,7 @@ func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
 
 func upstreamDNSQuery(servers []string, m *dns.Msg) []dns.RR {
 	if len(servers) == 0 {
-		logutil.LogWithBufferf("[ERROR] No upstream DNS servers available")
+		logutil.Logger.Warn("No upstream DNS servers available")
 		return nil
 	}
 	for _, svr := range servers {
@@ -106,7 +107,7 @@ func upstreamDNSQuery(servers []string, m *dns.Msg) []dns.RR {
 			}
 			return response.Answer
 		}
-		logutil.LogWithBufferf("[WARNING] exchange error using server %s: %v", svr, err)
+		logutil.Logger.Warnf("Exchange error using server %s: %v", svr, err)
 		if config.EnableMetrics {
 			metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
 			metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")

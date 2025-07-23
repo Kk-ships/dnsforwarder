@@ -23,7 +23,7 @@ func InitializeClientRouting() {
 	if !config.EnableClientRouting {
 		return
 	}
-	logutil.LogWithBufferf("Client-based DNS routing enabled")
+	logutil.Logger.Info("Client-based DNS routing enabled")
 
 	PrivateServersSet = make(map[string]struct{})
 	PublicServersSet = make(map[string]struct{})
@@ -37,8 +37,8 @@ func InitializeClientRouting() {
 	storeClientsToMap(config.PublicOnlyClients, &PublicOnlyClientsMap, "IP")
 	storeMACsToMap(config.PublicOnlyClientMACs, &PublicOnlyClientMACsMap)
 
-	logutil.LogWithBufferf("Private servers: %v", config.PrivateServers)
-	logutil.LogWithBufferf("Public servers: %v", config.PublicServers)
+	logutil.Logger.Infof("Private servers: %v", config.PrivateServers)
+	logutil.Logger.Infof("Public servers: %v", config.PublicServers)
 }
 
 func addServersToSet(servers []string, set map[string]struct{}) {
@@ -54,7 +54,7 @@ func storeClientsToMap(clients []string, m *sync.Map, clientType string) {
 		if client != "" {
 			client = strings.TrimSpace(client)
 			m.Store(client, true)
-			logutil.LogWithBufferf("Configured client %s to use public servers only (%s)", client, clientType)
+			logutil.Logger.Debugf("Configured client %s to use public servers only (%s)", client, clientType)
 		}
 	}
 }
@@ -64,7 +64,7 @@ func storeMACsToMap(macs []string, m *sync.Map) {
 		macNorm := util.NormalizeMAC(mac)
 		if macNorm != "" {
 			m.Store(macNorm, true)
-			logutil.LogWithBufferf("Configured client %s to use public servers only (MAC)", macNorm)
+			logutil.Logger.Debugf("Configured client %s to use public servers only (MAC)", macNorm)
 		}
 	}
 }

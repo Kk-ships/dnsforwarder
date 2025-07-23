@@ -39,7 +39,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if config.EnableMetrics {
 			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
 		}
-		logutil.LogWithBufferf("[ERROR] Failed to write DNS response: %v", err)
+		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 	}
 }
 
@@ -56,7 +56,7 @@ func StartDNSServer() {
 	if config.EnableMetrics {
 		go StartMetricsServer()
 		go StartMetricsUpdater()
-		logutil.LogWithBufferf("Prometheus metrics enabled on %s/metrics", config.DefaultMetricsPort)
+		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", config.DefaultMetricsPort)
 	}
 
 	// DNS server setup
@@ -69,7 +69,7 @@ func StartDNSServer() {
 		ReusePort: true,
 	}
 
-	logutil.LogWithBufferf("Starting DNS server on port 53 (UDP)")
+	logutil.Logger.Infof("Starting DNS server on port 53 (UDP)")
 	// --- Server Execution ---
 	errCh := make(chan error, 1)
 	go func() {
@@ -82,17 +82,17 @@ func StartDNSServer() {
 
 	select {
 	case sig := <-sigCh:
-		logutil.LogWithBufferf("Received signal %s, shutting down DNS server gracefully...", sig)
+		logutil.Logger.Infof("Received signal %s, shutting down DNS server gracefully...", sig)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.ShutdownContext(ctx); err != nil {
-			logutil.LogWithBufferf("[ERROR] Graceful shutdown failed: %v", err)
+			logutil.Logger.Errorf("Graceful shutdown failed: %v", err)
 		} else {
-			logutil.LogWithBufferf("DNS server shut down gracefully")
+			logutil.Logger.Infof("DNS server shut down gracefully")
 		}
 	case err := <-errCh:
 		if err != nil {
-			logutil.LogWithBufferFatalf("Failed to start server: %s\n", err.Error())
+			logutil.Logger.Fatalf("Failed to start server: %s\n", err.Error())
 		}
 	}
 }

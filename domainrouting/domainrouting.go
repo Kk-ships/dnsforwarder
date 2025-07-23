@@ -17,32 +17,32 @@ func InitializeDomainRouting() {
 	}
 	// Check if the domain routing folder is specified
 	if config.DomainRoutingFolder == "" {
-		logutil.LogWithBufferf("Domain routing is enabled but no folder is specified")
+		logutil.Logger.Error("Domain routing is enabled but no folder is specified")
 		os.Exit(1)
 	}
-	logutil.LogWithBufferf("Domain routing enabled with folder: %v", config.DomainRoutingFolder)
+	logutil.Logger.Infof("Domain routing enabled with folder: %v", config.DomainRoutingFolder)
 	loadRoutingTable(config.DomainRoutingFolder)
 	if len(RoutingTable) == 0 {
-		logutil.LogWithBufferf("No domain routing entries found in folder: %s", config.DomainRoutingFolder)
+		logutil.Logger.Errorf("No domain routing entries found in folder: %s", config.DomainRoutingFolder)
 		os.Exit(1)
 	}
 	// refresh routing table every DomainRoutingTableReloadInterval seconds
-	logutil.LogWithBufferf("Domain routing table will be refreshed every %d seconds", config.DomainRoutingTableReloadInterval)
+	logutil.Logger.Infof("Domain routing table will be refreshed every %d seconds", config.DomainRoutingTableReloadInterval)
 	go func() {
 		ticker := time.NewTicker(time.Duration(config.DomainRoutingTableReloadInterval) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			logutil.LogWithBufferf("Refreshing domain routing table from folder: %s", config.DomainRoutingFolder)
+			logutil.Logger.Infof("Refreshing domain routing table from folder: %s", config.DomainRoutingFolder)
 			loadRoutingTable(config.DomainRoutingFolder)
 			if len(RoutingTable) == 0 {
-				logutil.LogWithBufferf("No domain routing entries found after refresh in folder: %s", config.DomainRoutingFolder)
+				logutil.Logger.Errorf("No domain routing entries found after refresh in folder: %s", config.DomainRoutingFolder)
 				os.Exit(1)
 			}
-			logutil.LogWithBufferf("Domain routing table refreshed successfully, size: %d", len(RoutingTable))
+			logutil.Logger.Infof("Domain routing table refreshed successfully, size: %d", len(RoutingTable))
 		}
 	}()
-	logutil.LogWithBufferf("Domain routing initialized successfully")
-	logutil.LogWithBufferf("Routing table size: %d", len(RoutingTable))
+	logutil.Logger.Infof("Domain routing initialized successfully")
+	logutil.Logger.Infof("Routing table size: %d", len(RoutingTable))
 }
 
 func loadRoutingTable(folder string) {
@@ -51,7 +51,7 @@ func loadRoutingTable(folder string) {
 
 	files, err := os.ReadDir(folder)
 	if err != nil {
-		logutil.LogWithBufferf("Error reading domain routing folder %s: %v", folder, err)
+		logutil.Logger.Errorf("Error reading domain routing folder %s: %v", folder, err)
 		os.Exit(1)
 	}
 	// keep only .txt files
@@ -62,7 +62,7 @@ func loadRoutingTable(folder string) {
 		}
 	}
 	if len(txtFiles) == 0 {
-		logutil.LogWithBufferf("No .txt files found in domain routing folder %s", folder)
+		logutil.Logger.Warnf("No .txt files found in domain routing folder %s", folder)
 		os.Exit(1)
 	}
 	for _, file := range txtFiles {
@@ -72,17 +72,17 @@ func loadRoutingTable(folder string) {
 			fullPath := folder + "/" + file
 			fileInfo, err := os.Stat(fullPath)
 			if err != nil {
-				logutil.LogWithBufferf("Domain routing file %s error: %v", fullPath, err)
+				logutil.Logger.Errorf("Domain routing file %s error: %v", fullPath, err)
 				os.Exit(1)
 			}
 			if fileInfo.IsDir() {
-				logutil.LogWithBufferf("Domain routing file %s is a directory", fullPath)
+				logutil.Logger.Errorf("Domain routing file %s is a directory", fullPath)
 				os.Exit(1)
 			}
-			logutil.LogWithBufferf("Loading domain routing configuration from %s", fullPath)
+			logutil.Logger.Infof("Loading domain routing configuration from %s", fullPath)
 			fileContent, err := os.ReadFile(fullPath)
 			if err != nil {
-				logutil.LogWithBufferf("Error reading domain routing file %s: %v", fullPath, err)
+				logutil.Logger.Errorf("Error reading domain routing file %s: %v", fullPath, err)
 				os.Exit(1)
 			}
 			lines := strings.SplitSeq(string(fileContent), "\n")

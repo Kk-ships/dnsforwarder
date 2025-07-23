@@ -284,6 +284,7 @@ GNU General Public License v3.0
 ## Credits
 - [miekg/dns](https://github.com/miekg/dns)
 - [patrickmn/go-cache](https://github.com/patrickmn/go-cache)
+- [sirupsen/logrus](https://github.com/sirupsen/logrus)
 - [prometheus/client_golang](https://github.com/prometheus/client_golang)
 - [beorn7/perks](https://github.com/beorn7/perks)
 - [cespare/xxhash](https://github.com/cespare/xxhash)

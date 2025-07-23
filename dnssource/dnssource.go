@@ -39,7 +39,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	servers := GetDNSServers()
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
 		metricsRecorder.RecordError("no_dns_servers", "config")
-		logutil.LogWithBufferFatalf("[ERROR] no DNS servers found")
+		logutil.Logger.Warn("No DNS servers found")
 	}
 
 	upstreamServerCount := len(servers)
@@ -99,7 +99,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 			dnsMsgPool.Put(m) // immediately return to pool
 
 			if err != nil {
-				logutil.LogWithBufferf("[WARNING] server %s is not reachable: %v", svr, err)
+				logutil.Logger.Warnf("server %s is not reachable: %v", svr, err)
 				if config.EnableMetrics {
 					metricsRecorder.SetUpstreamServerReachable(svr, false)
 					metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
@@ -132,7 +132,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 		if config.EnableMetrics {
 			metricsRecorder.RecordError("no_reachable_servers", "health_check")
 		}
-		logutil.LogWithBufferFatalf("[ERROR] no reachable DNS servers found")
+		logutil.Logger.Warn("No reachable DNS servers found")
 	}
 
 	CacheMutex.Lock()
