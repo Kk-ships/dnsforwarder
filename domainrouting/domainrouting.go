@@ -29,7 +29,7 @@ func InitializeDomainRouting() {
 	// refresh routing table every DomainRoutingTableReloadInterval seconds
 	logutil.LogWithBufferf("Domain routing table will be refreshed every %d seconds", config.DomainRoutingTableReloadInterval)
 	go func() {
-		ticker := time.NewTicker(config.DomainRoutingTableReloadInterval * time.Second)
+		ticker := time.NewTicker(time.Duration(config.DomainRoutingTableReloadInterval) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			logutil.LogWithBufferf("Refreshing domain routing table from folder: %s", config.DomainRoutingFolder)
@@ -69,19 +69,20 @@ func loadRoutingTable(folder string) {
 		wg.Add(1)
 		go func(file string) {
 			defer wg.Done()
-			fileInfo, err := os.Stat(file)
+			fullPath := folder + "/" + file
+			fileInfo, err := os.Stat(fullPath)
 			if err != nil {
-				logutil.LogWithBufferf("Domain routing file %s error: %v", file, err)
+				logutil.LogWithBufferf("Domain routing file %s error: %v", fullPath, err)
 				os.Exit(1)
 			}
 			if fileInfo.IsDir() {
-				logutil.LogWithBufferf("Domain routing file %s is a directory", file)
+				logutil.LogWithBufferf("Domain routing file %s is a directory", fullPath)
 				os.Exit(1)
 			}
-			logutil.LogWithBufferf("Loading domain routing configuration from %s", file)
-			fileContent, err := os.ReadFile(file)
+			logutil.LogWithBufferf("Loading domain routing configuration from %s", fullPath)
+			fileContent, err := os.ReadFile(fullPath)
 			if err != nil {
-				logutil.LogWithBufferf("Error reading domain routing file %s: %v", file, err)
+				logutil.LogWithBufferf("Error reading domain routing file %s: %v", fullPath, err)
 				os.Exit(1)
 			}
 			lines := strings.SplitSeq(string(fileContent), "\n")
@@ -104,7 +105,6 @@ func loadRoutingTable(folder string) {
 				}
 				// add ':53' to IP end if not present to ensure it's a valid DNS server address
 				if !strings.HasSuffix(ip, ":53") {
-					logutil.LogWithBufferf("[DEBUG] Adding port 53 to IP %s for domain %s", ip, domain)
 					ip += ":53"
 				}
 				mu.Lock()
