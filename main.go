@@ -6,6 +6,7 @@ import (
 	"dnsloadbalancer/clientrouting"
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/dnsresolver"
+	"dnsloadbalancer/dnssource"
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
@@ -20,6 +21,7 @@ import (
 type dnsHandler struct{}
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	logutil.Logger.Debug("ServeDNS: start")
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
@@ -27,11 +29,13 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) > 0 {
 		q := r.Question[0]
 		clientIP := util.GetClientIP(w)
+		logutil.Logger.Debugf("ServeDNS: clientIP=%s, q.Name=%s, q.Qtype=%d", clientIP, q.Name, q.Qtype)
 		answers := cache.ResolverWithCache(
 			q.Name, q.Qtype, clientIP,
 		)
 		if answers != nil {
 			msg.Answer = answers
+			logutil.Logger.Debugf("ServeDNS: got answers for %s", q.Name)
 		}
 	}
 
@@ -41,16 +45,29 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 	}
+	logutil.Logger.Debug("ServeDNS: end")
 }
 
 // --- Server Startup ---
 func StartDNSServer() {
+	logutil.Logger.Debug("StartDNSServer: start")
 	// --- Initialization ---
 	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, metricsRecorder, config.EnableClientRouting, config.EnableDomainRouting)
-	// this is blocking since all available upstream cache should be populated before starting server
-	dnsresolver.UpdateDNSServersCache()
+	logutil.Logger.Debug("StartDNSServer: cache initialized")
+	dnssource.InitDNSSource(metricsRecorder)
+	logutil.Logger.Debug("StartDNSServer: dns source initialized")
+	done := make(chan struct{})
+	go func() {
+		dnsresolver.UpdateDNSServersCache()
+		close(done)
+	}()
+	<-done
+	logutil.Logger.Debug("StartDNSServer: dns servers cache updated")
+	logutil.Logger.Infof("DNS servers cache updated with private: %v, public: %v", dnssource.PrivateServersCache, dnssource.PublicServersCache)
 	domainrouting.InitializeDomainRouting()
+	logutil.Logger.Debug("StartDNSServer: domain routing initialized")
 	clientrouting.InitializeClientRouting()
+	logutil.Logger.Debug("StartDNSServer: client routing initialized")
 	// Start cache stats and metrics logging in background
 	go cache.StartCacheStatsLogger()
 	if config.EnableMetrics {
@@ -68,14 +85,12 @@ func StartDNSServer() {
 		UDPSize:   config.DefaultUDPSize,
 		ReusePort: true,
 	}
-
 	logutil.Logger.Infof("Starting DNS server on port 53 (UDP)")
 	// --- Server Execution ---
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- server.ListenAndServe()
 	}()
-
 	// Graceful shutdown on signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -95,8 +110,11 @@ func StartDNSServer() {
 			logutil.Logger.Fatalf("Failed to start server: %s\n", err.Error())
 		}
 	}
+	logutil.Logger.Debug("StartDNSServer: end")
 }
 
 func main() {
+	logutil.Logger.Debug("main: start")
 	StartDNSServer()
+	logutil.Logger.Debug("main: end")
 }

@@ -28,6 +28,7 @@ func SetLogLevel(level string) {
 
 func init() {
 	Logger = log.New()
+	Logger.SetReportCaller(true)
 	Logger.SetOutput(os.Stdout)
 	Logger.SetFormatter(&log.TextFormatter{
 		FullTimestamp: true,

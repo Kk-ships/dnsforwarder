@@ -34,3 +34,7 @@ docker-compose*
 # IDE/editor folders
 .idea/
 .vscode/
+
+# .env files
+.env
+.env*

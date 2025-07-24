@@ -16,10 +16,6 @@ import (
 	"github.com/patrickmn/go-cache"
 )
 
-type cacheEntry struct {
-	Answers []dns.RR
-}
-
 var (
 	cacheHits           int64
 	cacheRequests       int64
@@ -67,9 +63,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	start := time.Now()
 	key := CacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
-
 	qTypeStr := dns.TypeToString[qtype]
-
 	if answers, ok := LoadFromCache(key); ok {
 		atomic.AddInt64(&cacheHits, 1)
 		if EnableMetrics {
@@ -78,23 +72,16 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		}
 		return answers
 	}
-
 	if EnableMetrics {
 		metric.MetricsRecorderInstance.RecordCacheMiss()
 	}
-
 	var answers []dns.RR
 	var resolver func(string, uint16, string) []dns.RR
+	resolver = dnsresolver.ResolverForClient
 	if EnableDomainRouting {
 		if _, ok := domainrouting.RoutingTable[domain]; ok {
 			resolver = dnsresolver.ResolverForDomain
-		} else {
-			resolver = dnsresolver.ResolverForClient
 		}
-	} else if EnableClientRouting && clientIP != "" {
-		resolver = dnsresolver.ResolverForClient
-	} else {
-		resolver = dnsresolver.ResolverForDomain
 	}
 	answers = resolver(domain, qtype, clientIP)
 	status := "success"
@@ -130,7 +117,6 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 			break
 		}
 	}
-
 	ttl := DefaultDNSCacheTTL
 	if !useDefaultTTL && minTTL > 0 {
 		ttlDuration := time.Duration(minTTL) * time.Second
@@ -143,7 +129,6 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		}
 	}
 	go SaveToCache(key, answers, ttl)
-
 	if EnableMetrics {
 		metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 	}
@@ -169,7 +154,7 @@ func StartCacheStatsLogger() {
 				if itemCount == 0 {
 					logutil.Logger.Warn("No cache entries found")
 				} else {
-					logutil.Logger.Info("Cache Entries:", itemCount)
+					logutil.Logger.Infof("Cache Entries: %d", itemCount)
 					if EnableMetrics {
 						metric.MetricsRecorderInstance.UpdateCacheSize(itemCount)
 					}
