@@ -34,7 +34,7 @@ func InitializeDomainRouting() {
 			if len(RoutingTable) == 0 {
 				logutil.Logger.Fatalf("No domain routing entries found after refresh in folder: %s", config.DomainRoutingFolder)
 			}
-			}
+		}
 	}()
 	logutil.Logger.Infof("Domain routing initialized successfully")
 	logutil.Logger.Infof("Routing table size: %d", len(RoutingTable))

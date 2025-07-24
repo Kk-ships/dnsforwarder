@@ -5,7 +5,6 @@ import (
 	"dnsloadbalancer/util"
 	"net/http"
 	"runtime"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -110,7 +109,6 @@ var (
 	totalCacheMisses      int64
 	totalUpstreamQueries  int64
 	totalErrors           int64
-	dnsCacheMutex         sync.Mutex
 )
 
 func init() {
@@ -204,12 +202,16 @@ func StartMetricsServer() {
 	mux.Handle(metricsPath, promhttp.Handler())
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		if _, err := w.Write([]byte("OK")); err != nil {
+			logutil.Logger.Errorf("Failed to write health check response: %v", err)
+		}
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"running","service":"dns-forwarder"}`))
+		if _, err := w.Write([]byte(`{"status":"running","service":"dns-forwarder"}`)); err != nil {
+			logutil.Logger.Errorf("Failed to write status response: %v", err)
+		}
 	})
 	server := &http.Server{
 		Addr:    metricsPort,

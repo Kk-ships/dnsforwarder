@@ -124,7 +124,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 				reachablePublic = append(reachablePublic, svr)
 			}
 			mu.Unlock()
-			}(server)
+		}(server)
 	}
 
 	wg.Wait()
@@ -161,17 +161,11 @@ func GetServersForClient(clientIP string, cacheMutex *sync.RWMutex) (privateServ
 }
 
 func IsPrivateServer(server string) bool {
-	exists := false
-	if _, ok := PrivateServersSet[server]; ok {
-		exists = true
-	}
-	return exists
+	_, ok := PrivateServersSet[server]
+	return ok
 }
 
 func IsPublicServer(server string) bool {
-	exists := false
-	if _, ok := PublicServersSet[server]; ok {
-		exists = true
-	}
-	return exists
+	_, ok := PublicServersSet[server]
+	return ok
 }

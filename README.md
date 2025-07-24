@@ -142,7 +142,7 @@ The DNS forwarder supports intelligent client-based routing, allowing you to dir
 #### How It Works
 
 1. **Default Behavior (`ENABLE_CLIENT_ROUTING=false`):**
-   - All clients use the same upstream servers defined in `PRIVATE_DNS_SERVERS` first 
+   - All clients use the same upstream servers defined in `PRIVATE_DNS_SERVERS` first
      and `PUBLIC_DNS_SERVERS` as fallback.
 
 2. **Client Routing Enabled (`ENABLE_CLIENT_ROUTING=true`):**

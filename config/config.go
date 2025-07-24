@@ -43,4 +43,3 @@ var (
 	// Logging configuration
 	LogLevel = util.GetEnvString("LOG_LEVEL", "info")
 )
-

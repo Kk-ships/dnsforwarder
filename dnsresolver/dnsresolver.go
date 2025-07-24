@@ -35,7 +35,7 @@ func UpdateDNSServersCache() {
 			dnsClient,
 			&dnsMsgPool,
 		)
-		}
+	}
 }
 
 func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {

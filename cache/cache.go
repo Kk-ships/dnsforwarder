@@ -16,10 +16,6 @@ import (
 	"github.com/patrickmn/go-cache"
 )
 
-type cacheEntry struct {
-	Answers []dns.RR
-}
-
 var (
 	cacheHits           int64
 	cacheRequests       int64
@@ -44,8 +40,7 @@ func CacheKey(domain string, qtype uint16) string {
 	b.WriteString(domain)
 	b.WriteByte(':')
 	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
-	key := b.String()
-	return key
+	return b.String()
 }
 
 func SaveToCache(key string, answers []dns.RR, ttl time.Duration) {
