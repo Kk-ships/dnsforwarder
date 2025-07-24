@@ -85,16 +85,11 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 
 	var answers []dns.RR
 	var resolver func(string, uint16, string) []dns.RR
+	resolver = dnsresolver.ResolverForClient
 	if EnableDomainRouting {
 		if _, ok := domainrouting.RoutingTable[domain]; ok {
 			resolver = dnsresolver.ResolverForDomain
-		} else {
-			resolver = dnsresolver.ResolverForClient
 		}
-	} else if EnableClientRouting && clientIP != "" {
-		resolver = dnsresolver.ResolverForClient
-	} else {
-		resolver = dnsresolver.ResolverForDomain
 	}
 	answers = resolver(domain, qtype, clientIP)
 	status := "success"
@@ -130,7 +125,6 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 			break
 		}
 	}
-
 	ttl := DefaultDNSCacheTTL
 	if !useDefaultTTL && minTTL > 0 {
 		ttlDuration := time.Duration(minTTL) * time.Second
