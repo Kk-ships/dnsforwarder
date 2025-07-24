@@ -54,7 +54,7 @@ func storeClientsToMap(clients []string, m *sync.Map, clientType string) {
 		if client != "" {
 			client = strings.TrimSpace(client)
 			m.Store(client, true)
-			logutil.Logger.Debugf("Configured client %s to use public servers only (%s)", client, clientType)
+			logutil.Logger.Infof("Configured client %s to use public servers only (%s)", client, clientType)
 		}
 	}
 }
@@ -64,7 +64,7 @@ func storeMACsToMap(macs []string, m *sync.Map) {
 		macNorm := util.NormalizeMAC(mac)
 		if macNorm != "" {
 			m.Store(macNorm, true)
-			logutil.Logger.Debugf("Configured client %s to use public servers only (MAC)", macNorm)
+			logutil.Logger.Infof("Configured client %s to use public servers only (MAC)", macNorm)
 		}
 	}
 }

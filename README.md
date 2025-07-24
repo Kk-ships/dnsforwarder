@@ -80,6 +80,8 @@ DNS_STATSLOG=1m
 DEFAULT_DNS_SERVER=8.8.8.8:53
 CACHE_SIZE=10000
 DNS_CACHE_TTL=30m
+
+# Metric Configuration
 ENABLE_METRICS=true
 METRICS_PORT=:8080
 METRICS_PATH=/metrics
@@ -93,7 +95,11 @@ PUBLIC_ONLY_CLIENTS=192.168.1.100,10.0.0.50
 
 # Domain Routing (Optional)
 ENABLE_DOMAIN_ROUTING=true
-DOMAIN_ROUTING_FILES=/etc/dnsforwarder/domain-routes.txt,/etc/dnsforwarder/extra-routes.txt
+DOMAIN_ROUTING_FOLDER=/etc/dnsforwarder/domain-routes
+DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
+
+# Logger Configuration
+LOG_LEVEL=info
 ```
 
 #### Basic Configuration
@@ -104,6 +110,8 @@ DOMAIN_ROUTING_FILES=/etc/dnsforwarder/domain-routes.txt,/etc/dnsforwarder/extra
 - **DNS_PORT:** Port to listen on (default `:53`).
 - **CACHE_SIZE:** Maximum number of DNS entries to cache.
 - **DNS_CACHE_TTL:** How long to cache DNS responses.
+
+#### Metric Configuration
 - **ENABLE_METRICS:** Enable Prometheus metrics (default `true`).
 - **METRICS_PORT:** Port for Prometheus metrics endpoint (default `:8080`).
 - **METRICS_PATH:** Path for metrics endpoint (default `/metrics`).
@@ -117,7 +125,8 @@ DOMAIN_ROUTING_FILES=/etc/dnsforwarder/domain-routes.txt,/etc/dnsforwarder/extra
 
 #### Domain Routing Configuration
 - **ENABLE_DOMAIN_ROUTING:** Enable domain routing (default `false`).
-- **DOMAIN_ROUTING_FILES:** Comma-separated list of files containing domain routing rules.
+- **DOMAIN_ROUTING_FOLDER:** Comma-separated list of folders containing routing configuration files
+- **DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL** Domain routing reload interval in seconds
 
 ### 5. Client-Based DNS Routing
 
@@ -230,7 +239,7 @@ address=/internal.corp/10.10.1.1
 
 ### Troubleshooting
 - Check logs for messages about domain routing initialization and file loading errors.
-- Make sure the file paths in `DOMAIN_ROUTING_FILES` are correct and accessible by the DNS forwarder.
+- Make sure the file paths in `DOMAIN_ROUTING_FOLDER` are correct and accessible by the DNS forwarder.
 - Ensure each rule is in the correct format and not commented out.
 
 ---
