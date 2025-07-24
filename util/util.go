@@ -75,7 +75,7 @@ func GetEnvStringSlice(key, def string) []string {
 		return out
 	}
 	if def == "" {
-		return nil
+		return []string{} // return empty slice if no default is provided
 	}
 	return []string{def}
 }

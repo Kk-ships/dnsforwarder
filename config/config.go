@@ -12,7 +12,11 @@ const NegativeResponseTTLDivisor = 4
 const MinCacheTTL = 30 * time.Second
 const MaxCacheTTL = 24 * time.Hour
 
+const DefaultPublicDNS = "1.1.1.1:53"
+
 var (
+	PrivateServers      = util.GetEnvStringSlice("PRIVATE_DNS_SERVERS", "")
+	PublicServers       = util.GetEnvStringSlice("PUBLIC_DNS_SERVERS", DefaultPublicDNS)
 	DefaultCacheRefresh = util.GetEnvDuration("CACHE_SERVERS_REFRESH", 10*time.Second) // Default Duration for DNS servers Health Check
 	DefaultDNSTimeout   = util.GetEnvDuration("DNS_TIMEOUT", 5*time.Second)
 	DefaultWorkerCount  = util.GetEnvInt("WORKER_COUNT", 5)
@@ -20,7 +24,6 @@ var (
 	DefaultDNSPort      = util.GetEnvString("DNS_PORT", ":53")
 	DefaultUDPSize      = util.GetEnvInt("UDP_SIZE", 65535)
 	DefaultDNSStatslog  = util.GetEnvDuration("DNS_STATSLOG", 5*time.Minute)
-	DefaultDNSServer    = util.GetEnvString("DEFAULT_DNS_SERVER", "8.8.8.8:53")
 	DefaultCacheSize    = util.GetEnvInt("CACHE_SIZE", 10000)
 	DefaultDNSCacheTTL  = util.GetEnvDuration("DNS_CACHE_TTL", 30*time.Minute)
 
@@ -29,8 +32,6 @@ var (
 	EnableMetrics      = util.GetEnvBool("ENABLE_METRICS", true)
 
 	// Client-based routing configuration
-	PrivateServers       = util.GetEnvStringSlice("PRIVATE_DNS_SERVERS", "192.168.1.1:53")
-	PublicServers        = util.GetEnvStringSlice("PUBLIC_DNS_SERVERS", "1.1.1.1:53,8.8.8.8:53")
 	PublicOnlyClients    = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", "")
 	PublicOnlyClientMACs = util.GetEnvStringSlice("PUBLIC_ONLY_CLIENT_MACS", "")
 	EnableClientRouting  = util.GetEnvBool("ENABLE_CLIENT_ROUTING", false)
@@ -53,7 +54,6 @@ func init() {
 	log.Printf("config: DefaultDNSPort=%v", DefaultDNSPort)
 	log.Printf("config: DefaultUDPSize=%v", DefaultUDPSize)
 	log.Printf("config: DefaultDNSStatslog=%v", DefaultDNSStatslog)
-	log.Printf("config: DefaultDNSServer=%v", DefaultDNSServer)
 	log.Printf("config: DefaultCacheSize=%v", DefaultCacheSize)
 	log.Printf("config: DefaultDNSCacheTTL=%v", DefaultDNSCacheTTL)
 	log.Printf("config: DefaultMetricsPort=%v", DefaultMetricsPort)
