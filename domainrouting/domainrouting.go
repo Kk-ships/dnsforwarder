@@ -30,13 +30,11 @@ func InitializeDomainRouting() {
 		ticker := time.NewTicker(time.Duration(config.DomainRoutingTableReloadInterval) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			logutil.Logger.Debugf("Refreshing domain routing table from folder: %s", config.DomainRoutingFolder)
 			loadRoutingTable(config.DomainRoutingFolder)
 			if len(RoutingTable) == 0 {
 				logutil.Logger.Fatalf("No domain routing entries found after refresh in folder: %s", config.DomainRoutingFolder)
 			}
-			logutil.Logger.Debugf("Domain routing table refreshed successfully, size: %d", len(RoutingTable))
-		}
+			}
 	}()
 	logutil.Logger.Infof("Domain routing initialized successfully")
 	logutil.Logger.Infof("Routing table size: %d", len(RoutingTable))
@@ -72,7 +70,6 @@ func loadRoutingTable(folder string) {
 			if fileInfo.IsDir() {
 				logutil.Logger.Fatalf("Domain routing file %s is a directory", fullPath)
 			}
-			logutil.Logger.Debugf("Loading domain routing configuration from %s", fullPath)
 			fileContent, err := os.ReadFile(fullPath)
 			if err != nil {
 				logutil.Logger.Fatalf("Error reading domain routing file %s: %v", fullPath, err)

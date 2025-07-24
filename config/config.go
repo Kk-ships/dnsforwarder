@@ -2,7 +2,6 @@ package config
 
 import (
 	"dnsloadbalancer/util"
-	"log"
 	"time"
 )
 
@@ -45,27 +44,3 @@ var (
 	LogLevel = util.GetEnvString("LOG_LEVEL", "info")
 )
 
-func init() {
-	log.Print("config: package init start")
-	log.Printf("config: DefaultCacheRefresh=%v", DefaultCacheRefresh)
-	log.Printf("config: DefaultDNSTimeout=%v", DefaultDNSTimeout)
-	log.Printf("config: DefaultWorkerCount=%v", DefaultWorkerCount)
-	log.Printf("config: DefaultTestDomain=%v", DefaultTestDomain)
-	log.Printf("config: DefaultDNSPort=%v", DefaultDNSPort)
-	log.Printf("config: DefaultUDPSize=%v", DefaultUDPSize)
-	log.Printf("config: DefaultDNSStatslog=%v", DefaultDNSStatslog)
-	log.Printf("config: DefaultCacheSize=%v", DefaultCacheSize)
-	log.Printf("config: DefaultDNSCacheTTL=%v", DefaultDNSCacheTTL)
-	log.Printf("config: DefaultMetricsPort=%v", DefaultMetricsPort)
-	log.Printf("config: EnableMetrics=%v", EnableMetrics)
-	log.Printf("config: PrivateServers=%v", PrivateServers)
-	log.Printf("config: PublicServers=%v", PublicServers)
-	log.Printf("config: PublicOnlyClients=%v", PublicOnlyClients)
-	log.Printf("config: PublicOnlyClientMACs=%v", PublicOnlyClientMACs)
-	log.Printf("config: EnableClientRouting=%v", EnableClientRouting)
-	log.Printf("config: EnableDomainRouting=%v", EnableDomainRouting)
-	log.Printf("config: DomainRoutingFolder=%v", DomainRoutingFolder)
-	log.Printf("config: DomainRoutingTableReloadInterval=%v", DomainRoutingTableReloadInterval)
-	log.Printf("config: LogLevel=%v", LogLevel)
-	log.Print("config: package init end")
-}

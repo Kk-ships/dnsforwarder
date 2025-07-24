@@ -4,7 +4,6 @@ import (
 	"dnsloadbalancer/clientrouting"
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/logutil"
-	"dnsloadbalancer/util"
 	"sync"
 	"time"
 
@@ -31,7 +30,6 @@ type metricsRecorderInterface interface {
 }
 
 func InitDNSSource(metricsRecorder metricsRecorderInterface) {
-	logutil.Logger.Debug("InitDNSSource: start")
 	addServersToSet(config.PrivateServers, PrivateServersSet)
 	addServersToSet(config.PublicServers, PublicServersSet)
 	PrivateAndPublicFallback = append(config.PrivateServers, config.PublicServers...)
@@ -43,7 +41,6 @@ func InitDNSSource(metricsRecorder metricsRecorderInterface) {
 }
 
 func addServersToSet(servers []string, set map[string]struct{}) {
-	logutil.Logger.Debugf("addServersToSet: start, servers=%v", servers)
 	for _, s := range servers {
 		if s != "" {
 			set[s] = struct{}{}
@@ -55,9 +52,7 @@ func addServersToSet(servers []string, set map[string]struct{}) {
 // GetDNSServers returns the list of DNS servers from environment or config which can be used for DNS queries.
 // It combines private and public servers
 func GetDNSServers() []string {
-	logutil.Logger.Debug("GetDNSServers: start")
 	servers := PrivateAndPublicFallback
-	logutil.Logger.Debugf("GetDNSServers: returning %v", servers)
 	return servers
 }
 func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
@@ -66,9 +61,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	privateServers, publicServers []string,
 	dnsClient *dns.Client,
 	dnsMsgPool *sync.Pool) {
-	logutil.Logger.Debug("UpdateDNSServersCache: start")
 	servers := GetDNSServers() // Get all configured DNS servers
-	logutil.Logger.Debugf("UpdateDNSServersCache: servers=%v", servers)
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
 		metricsRecorder.RecordError("no_dns_servers", "config")
 		logutil.Logger.Fatalf("No DNS servers found")
@@ -88,7 +81,6 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	for server := range allServersToTest {
 		uniqueServers = append(uniqueServers, server)
 	}
-	logutil.Logger.Debugf("UpdateDNSServersCache: uniqueServers=%v", uniqueServers)
 	var (
 		reachablePrivate = make([]string, 0, len(privateServers)) // preallocate
 		reachablePublic  = make([]string, 0, len(publicServers))  // preallocate
@@ -101,7 +93,6 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(svr string) {
-			logutil.Logger.Debugf("UpdateDNSServersCache: goroutine start for server=%s", svr)
 			defer wg.Done()
 			defer func() { <-sem }()
 
@@ -119,7 +110,6 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 					metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
 					metricsRecorder.RecordError("upstream_unreachable", "health_check")
 				}
-				logutil.Logger.Debugf("UpdateDNSServersCache: goroutine end for server=%s (unreachable)", svr)
 				return
 			}
 
@@ -134,12 +124,10 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 				reachablePublic = append(reachablePublic, svr)
 			}
 			mu.Unlock()
-			logutil.Logger.Debugf("UpdateDNSServersCache: goroutine end for server=%s (reachable)", svr)
-		}(server)
+			}(server)
 	}
 
 	wg.Wait()
-	logutil.Logger.Debugf("UpdateDNSServersCache: all goroutines done, reachablePrivate=%v, reachablePublic=%v", reachablePrivate, reachablePublic)
 	if len(reachablePrivate)+len(reachablePublic) == 0 {
 		if config.EnableMetrics {
 			metricsRecorder.RecordError("no_reachable_servers", "health_check")
@@ -153,47 +141,22 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	CacheMutex.Unlock()
 	logutil.Logger.Debug("UpdateDNSServersCache: end")
 }
-func ShouldUsePublicServers(clientIP string) bool {
-	logutil.Logger.Debugf("ShouldUsePublicServers: start, clientIP=%s", clientIP)
-	if !config.EnableClientRouting {
-		logutil.Logger.Debug("ShouldUsePublicServers: client routing not enabled")
-		return false
-	}
-
-	if _, exists := clientrouting.PublicOnlyClientsMap.Load(clientIP); exists {
-		logutil.Logger.Debugf("ShouldUsePublicServers: clientIP %s found in PublicOnlyClientsMap", clientIP)
-		return true
-	}
-	mac := util.GetMACFromARP(clientIP)
-	if mac != "" {
-		_, exists := clientrouting.PublicOnlyClientMACsMap.Load(mac)
-		logutil.Logger.Debugf("ShouldUsePublicServers: MAC %s found in PublicOnlyClientMACsMap: %v", mac, exists)
-		return exists
-	}
-	logutil.Logger.Debugf("ShouldUsePublicServers: clientIP %s not found in any map", clientIP)
-	return false
-}
 
 func GetServersForClient(clientIP string, cacheMutex *sync.RWMutex) (privateServers []string, publicServers []string) {
-	logutil.Logger.Debugf("GetServersForClient: start, clientIP=%s", clientIP)
-	if ShouldUsePublicServers(clientIP) {
+	if clientrouting.ShouldUsePublicServers(clientIP) {
 		cacheMutex.RLock()
 		servers := PublicServersCache
 		cacheMutex.RUnlock()
 		if len(servers) > 0 {
-			logutil.Logger.Debugf("GetServersForClient: using only public servers for clientIP=%s: %v", clientIP, servers)
 			return []string{}, servers
 		}
-		logutil.Logger.Debugf("GetServersForClient: using only public fallback servers for clientIP=%s: %v", clientIP, PublicServersFallback)
 		return []string{}, PublicServersFallback
 	}
 	cacheMutex.RLock()
 	defer cacheMutex.RUnlock()
 	if len(PrivateServersCache) == 0 && len(PublicServersCache) == 0 {
-		logutil.Logger.Debugf("GetServersForClient: no cache, using fallback for clientIP=%s", clientIP)
 		return []string{}, PrivateAndPublicFallback
 	}
-	logutil.Logger.Debugf("GetServersForClient: using private=%v, public=%v for clientIP=%s", PrivateServersCache, PublicServersCache, clientIP)
 	return PrivateServersCache, PublicServersCache
 }
 
@@ -202,7 +165,6 @@ func IsPrivateServer(server string) bool {
 	if _, ok := PrivateServersSet[server]; ok {
 		exists = true
 	}
-	logutil.Logger.Debugf("IsPrivateServer: server=%s, exists=%v", server, exists)
 	return exists
 }
 
@@ -211,6 +173,5 @@ func IsPublicServer(server string) bool {
 	if _, ok := PublicServersSet[server]; ok {
 		exists = true
 	}
-	logutil.Logger.Debugf("IsPublicServer: server=%s, exists=%v", server, exists)
 	return exists
 }

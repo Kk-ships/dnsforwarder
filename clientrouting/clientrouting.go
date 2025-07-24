@@ -14,9 +14,7 @@ var (
 )
 
 func InitializeClientRouting() {
-	logutil.Logger.Debug("InitializeClientRouting: start")
 	if !config.EnableClientRouting {
-		logutil.Logger.Debug("InitializeClientRouting: client routing not enabled, end")
 		return
 	}
 	logutil.Logger.Info("Client-based DNS routing enabled")
@@ -26,7 +24,6 @@ func InitializeClientRouting() {
 }
 
 func storeClientsToMap(clients []string, m *sync.Map, clientType string) {
-	logutil.Logger.Debugf("storeClientsToMap: start, clients=%v, clientType=%s", clients, clientType)
 	for _, client := range clients {
 		if client != "" {
 			client = strings.TrimSpace(client)
@@ -38,7 +35,6 @@ func storeClientsToMap(clients []string, m *sync.Map, clientType string) {
 }
 
 func storeMACsToMap(macs []string, m *sync.Map) {
-	logutil.Logger.Debugf("storeMACsToMap: start, macs=%v", macs)
 	for _, mac := range macs {
 		macNorm := util.NormalizeMAC(mac)
 		if macNorm != "" {
@@ -47,4 +43,20 @@ func storeMACsToMap(macs []string, m *sync.Map) {
 		}
 	}
 	logutil.Logger.Debug("storeMACsToMap: end")
+}
+
+func ShouldUsePublicServers(clientIP string) bool {
+	if !config.EnableClientRouting {
+		return false
+	}
+
+	if _, exists := PublicOnlyClientsMap.Load(clientIP); exists {
+		return true
+	}
+	mac := util.GetMACFromARP(clientIP)
+	if mac != "" {
+		_, exists := PublicOnlyClientMACsMap.Load(mac)
+		return exists
+	}
+	return false
 }
