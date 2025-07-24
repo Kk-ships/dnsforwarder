@@ -69,15 +69,15 @@ docker compose up --build
 You can configure the forwarder using environment variables or a `.env` file. Example `.env`:
 
 ```
-DNS_SERVERS=192.168.0.110:53,8.8.8.8:53
-CACHE_TTL=10s
+PRIVATE_DNS_SERVERS=192.168.1.1:53,192.168.1.2:53
+PUBLIC_DNS_SERVERS=1.1.1.1:53,8.8.8.8:53
+CACHE_SERVERS_TTL=10s
 DNS_TIMEOUT=5s
 WORKER_COUNT=5
 TEST_DOMAIN=google.com
 DNS_PORT=:53
 UDP_SIZE=65535
 DNS_STATSLOG=1m
-DEFAULT_DNS_SERVER=8.8.8.8:53
 CACHE_SIZE=10000
 DNS_CACHE_TTL=30m
 
@@ -89,9 +89,8 @@ METRICS_UPDATE_INTERVAL=30s
 
 # Client-Based DNS Routing (Optional)
 ENABLE_CLIENT_ROUTING=true
-PRIVATE_DNS_SERVERS=192.168.1.1:53,192.168.1.2:53
-PUBLIC_DNS_SERVERS=1.1.1.1:53,8.8.8.8:53
 PUBLIC_ONLY_CLIENTS=192.168.1.100,10.0.0.50
+PUBLIC_ONLY_CLIENT_MACS=00:11:22:33:44:55,AA:BB:CC:DD:EE:FF
 
 # Domain Routing (Optional)
 ENABLE_DOMAIN_ROUTING=true
@@ -103,13 +102,18 @@ LOG_LEVEL=info
 ```
 
 #### Basic Configuration
-- **DNS_SERVERS:** Comma-separated list of upstream DNS servers.
-- **CACHE_TTL:** How long to cache the list of healthy DNS servers.
+- **PRIVATE_DNS_SERVERS:** Comma-separated list of private DNS servers (e.g., PiHole, AdGuard Home).
+- **PUBLIC_DNS_SERVERS:** Comma-separated list of public DNS servers (e.g., Cloudflare, Google).
+- **CACHE_SERVERS_REFRESH:** Refresh interval of probing healthy servers.
 - **DNS_TIMEOUT:** Timeout for DNS queries to upstream servers.
 - **WORKER_COUNT:** Number of concurrent health checks for upstream servers.
+- **TEST_DOMAIN** Test domain to check DNS resolution (default `google.com`).
 - **DNS_PORT:** Port to listen on (default `:53`).
+- **UDP_SIZE:** Maximum UDP packet size (default `65535`).
+- **DNS_STATSLOG:** Interval for logging DNS statistics (default `1m`).
 - **CACHE_SIZE:** Maximum number of DNS entries to cache.
-- **DNS_CACHE_TTL:** How long to cache DNS responses.
+- **DNS_CACHE_TTL:** How long to cache DNS responses if not specified by upstream servers (default `30m`).
+
 
 #### Metric Configuration
 - **ENABLE_METRICS:** Enable Prometheus metrics (default `true`).
@@ -119,9 +123,8 @@ LOG_LEVEL=info
 
 #### Client-Based DNS Routing Configuration
 - **ENABLE_CLIENT_ROUTING:** Enable client-based DNS routing (default `false`).
-- **PRIVATE_DNS_SERVERS:** Comma-separated list of private DNS servers (e.g., PiHole, AdGuard Home).
-- **PUBLIC_DNS_SERVERS:** Comma-separated list of public DNS servers (e.g., Cloudflare, Google).
 - **PUBLIC_ONLY_CLIENTS:** Comma-separated list of client IPs that should only use public DNS servers.
+- **PUBLIC_ONLY_CLIENTS_MAC** Comma-separated list of client MAC addresses that should only use public DNS servers.
 
 #### Domain Routing Configuration
 - **ENABLE_DOMAIN_ROUTING:** Enable domain routing (default `false`).
@@ -139,7 +142,8 @@ The DNS forwarder supports intelligent client-based routing, allowing you to dir
 #### How It Works
 
 1. **Default Behavior (`ENABLE_CLIENT_ROUTING=false`):**
-   - All clients use the same upstream servers defined in `DNS_SERVERS`.
+   - All clients use the same upstream servers defined in `PUBLIC_DNS_SERVERS` first 
+     and `PRIVATE_DNS_SERVERS` as fallback.
 
 2. **Client Routing Enabled (`ENABLE_CLIENT_ROUTING=true`):**
    - Most clients use `PRIVATE_DNS_SERVERS` first, with `PUBLIC_DNS_SERVERS` as fallback.
@@ -158,8 +162,6 @@ Set the `PUBLIC_ONLY_CLIENT_MACS` environment variable to a comma-separated list
 
 ```
 ENABLE_CLIENT_ROUTING=true
-PRIVATE_DNS_SERVERS=192.168.1.10:53,192.168.1.11:53
-PUBLIC_DNS_SERVERS=1.1.1.1:53,8.8.8.8:53
 PUBLIC_ONLY_CLIENTS=192.168.1.100,10.0.0.50
 PUBLIC_ONLY_CLIENT_MACS=00:11:22:33:44:55,AA:BB:CC:DD:EE:FF
 ```

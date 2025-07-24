@@ -1,117 +1,135 @@
 package dnsresolver
 
 import (
-	"dnsloadbalancer/clientrouting"
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/dnssource"
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
+	"time"
 
 	"sync"
-	"time"
 
 	"dnsloadbalancer/metric"
 
 	"github.com/miekg/dns"
-	
 )
 
 var (
 	metricsRecorder = metric.MetricsRecorderInstance
 	dnsUsageStats   = make(map[string]int)
 	statsMutex      sync.Mutex
-	cacheTTL        = config.DefaultCacheTTL
+	cacheRefresh    = config.DefaultCacheRefresh
 	dnsClient       = &dns.Client{Timeout: config.DefaultDNSTimeout}
 	dnsMsgPool      = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
 )
 
 func UpdateDNSServersCache() {
-	dnssource.UpdateDNSServersCache(
-		metric.MetricsRecorderInstance,
-		cacheTTL,
-		config.EnableClientRouting,
-		config.PrivateServers,
-		config.PublicServers,
-		dnsClient,
-		&dnsMsgPool,
-	)
-}
-
-func getCachedDNSServers() []string {
-	var servers []string
-	dnssource.CacheMutex.RLock()
-	cacheValid := time.Since(dnssource.CacheLastUpdated) <= cacheTTL && len(dnssource.ReachableServersCache) > 0
-	servers = append([]string(nil), dnssource.ReachableServersCache...)
-	dnssource.CacheMutex.RUnlock()
-
-	if cacheValid {
-		return servers
+	logutil.Logger.Debug("UpdateDNSServersCache: start")
+	ticker := time.Tick(cacheRefresh)
+	for range ticker {
+		logutil.Logger.Debug("UpdateDNSServersCache: tick")
+		dnssource.UpdateDNSServersCache(
+			metricsRecorder,
+			cacheRefresh,
+			config.EnableClientRouting,
+			config.PrivateServers,
+			config.PublicServers,
+			dnsClient,
+			&dnsMsgPool,
+		)
+		logutil.Logger.Debug("UpdateDNSServersCache: cache updated")
 	}
-	UpdateDNSServersCache()
-	dnssource.CacheMutex.RLock()
-	servers = append([]string(nil), dnssource.ReachableServersCache...)
-	dnssource.CacheMutex.RUnlock()
-	return servers
 }
 
 func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
+	logutil.Logger.Debugf("prepareDNSQuery: start, domain=%s, qtype=%d", domain, qtype)
 	m := dnsMsgPool.Get().(*dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), qtype)
 	m.RecursionDesired = true
+	logutil.Logger.Debug("prepareDNSQuery: end")
 	return m
 }
 
 func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
+	logutil.Logger.Debugf("ResolverForClient: start, domain=%s, qtype=%d, clientIP=%s", domain, qtype, clientIP)
 	m := prepareDNSQuery(domain, qtype)
 	defer dnsMsgPool.Put(m)
-
-	var servers []string
-	// Prefer client-specific servers if clientIP is available
-	// This allows client routing to take precedence over the general server cache.
-	// If client routing is not enabled or no specific servers are found, fallback to cached servers
-	// or default servers.
-	if clientIP != "" {
-		servers = clientrouting.GetServersForClient(clientIP, &dnssource.CacheMutex)
-		if servers == nil {
-			servers = getCachedDNSServers()
-		}
-	} else {
-		servers = getCachedDNSServers()
-	}
-	return upstreamDNSQuery(servers, m)
+	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
+	logutil.Logger.Debugf("ResolverForClient: privateServers=%v, publicServers=%v", privateServers, publicServers)
+	result := upstreamDNSQuery(privateServers, publicServers, m)
+	logutil.Logger.Debug("ResolverForClient: end")
+	return result
 }
 
 func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
+	logutil.Logger.Debugf("ResolverForDomain: start, domain=%s, qtype=%d, clientIP=%s", domain, qtype, clientIP)
 	m := prepareDNSQuery(domain, qtype)
 	defer dnsMsgPool.Put(m)
-
 	if svr, ok := domainrouting.RoutingTable[domain]; ok {
-		return upstreamDNSQuery([]string{svr}, m)
+		logutil.Logger.Debugf("ResolverForDomain: found routing for domain=%s, server=%s", domain, svr)
+		result := upstreamDNSQuery([]string{svr}, []string{}, m)
+		logutil.Logger.Debug("ResolverForDomain: end (domain routing)")
+		return result
 	}
-	return ResolverForClient(domain, qtype, clientIP)
+	result := ResolverForClient(domain, qtype, clientIP)
+	logutil.Logger.Debug("ResolverForDomain: end (client routing)")
+	return result
 }
 
-func upstreamDNSQuery(servers []string, m *dns.Msg) []dns.RR {
-	if len(servers) == 0 {
+func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Msg) []dns.RR {
+	logutil.Logger.Debugf("upstreamDNSQuery: start, privateServers=%v, publicServers=%v", privateServers, publicServers)
+	if len(publicServers) == 0 && len(privateServers) == 0 {
 		logutil.Logger.Warn("No upstream DNS servers available")
+		logutil.Logger.Debug("upstreamDNSQuery: end (no servers)")
 		return nil
 	}
-	for _, svr := range servers {
-		response, rtt, err := dnsClient.Exchange(m, svr)
-		if err == nil && response != nil {
-			statsMutex.Lock()
-			dnsUsageStats[svr]++
-			statsMutex.Unlock()
-			if config.EnableMetrics {
-				metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
-			}
-			return response.Answer
+	for _, svr := range privateServers {
+		logutil.Logger.Debugf("upstreamDNSQuery: trying private server %s", svr)
+		answer, err := exchangeWithServer(m, svr)
+		if err == nil {
+			logutil.Logger.Debugf("upstreamDNSQuery: got answer from private server %s", svr)
+			logutil.Logger.Debug("upstreamDNSQuery: end (private server success)")
+			return answer
 		}
-		logutil.Logger.Warnf("Exchange error using server %s: %v", svr, err)
-		if config.EnableMetrics {
-			metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
-			metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
+		logutil.Logger.Warnf("Failed to query private server %s: %v", svr, err)
+	}
+	if len(publicServers) == 0 {
+		logutil.Logger.Warn("No public servers available after trying private servers")
+		logutil.Logger.Debug("upstreamDNSQuery: end (no public servers)")
+		return nil
+	}
+	logutil.Logger.Debugf("upstreamDNSQuery: trying public servers: %v", publicServers)
+	for _, svr := range publicServers {
+		logutil.Logger.Debugf("upstreamDNSQuery: trying public server %s", svr)
+		answer, err := exchangeWithServer(m, svr)
+		if err == nil {
+			logutil.Logger.Debugf("upstreamDNSQuery: got answer from public server %s", svr)
+			logutil.Logger.Debug("upstreamDNSQuery: end (public server success)")
+			return answer
 		}
 	}
+	logutil.Logger.Debug("upstreamDNSQuery: end (all servers failed)")
 	return nil
+}
+
+func exchangeWithServer(m *dns.Msg, svr string) ([]dns.RR, error) {
+	logutil.Logger.Debugf("exchangeWithServer: start, server=%s", svr)
+	response, rtt, err := dnsClient.Exchange(m, svr)
+	if err == nil && response != nil {
+		statsMutex.Lock()
+		dnsUsageStats[svr]++
+		statsMutex.Unlock()
+		if config.EnableMetrics {
+			metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
+		}
+		logutil.Logger.Debugf("exchangeWithServer: end, server=%s, success", svr)
+		return response.Answer, nil
+	}
+	logutil.Logger.Warnf("Exchange error using server %s: %v", svr, err)
+	if config.EnableMetrics {
+		metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
+		metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
+	}
+	logutil.Logger.Debugf("exchangeWithServer: end, server=%s, error", svr)
+	return nil, err
 }

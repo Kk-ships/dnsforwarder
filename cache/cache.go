@@ -31,39 +31,51 @@ var (
 )
 
 func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, enableClientRouting bool, enableDomainRouting bool) {
+	logutil.Logger.Debugf("Init: start, defaultDNSCacheTTL=%v, enableMetrics=%v, enableClientRouting=%v, enableDomainRouting=%v", defaultDNSCacheTTL, enableMetrics, enableClientRouting, enableDomainRouting)
 	DnsCache = cache.New(defaultDNSCacheTTL, 2*defaultDNSCacheTTL)
 	DefaultDNSCacheTTL = defaultDNSCacheTTL
 	EnableMetrics = enableMetrics
 	EnableClientRouting = enableClientRouting
 	EnableDomainRouting = enableDomainRouting
+	logutil.Logger.Debug("Init: end")
 }
 
 func CacheKey(domain string, qtype uint16) string {
+	logutil.Logger.Debugf("CacheKey: start, domain=%s, qtype=%d", domain, qtype)
 	var b strings.Builder
 	b.Grow(len(domain) + 1 + 5)
 	b.WriteString(domain)
 	b.WriteByte(':')
 	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
-	return b.String()
+	key := b.String()
+	logutil.Logger.Debugf("CacheKey: end, key=%s", key)
+	return key
 }
 
 func SaveToCache(key string, answers []dns.RR, ttl time.Duration) {
+	logutil.Logger.Debugf("SaveToCache: start, key=%s, ttl=%v, answers_len=%d", key, ttl, len(answers))
 	DnsCache.Set(key, answers, ttl)
+	logutil.Logger.Debug("SaveToCache: end")
 }
 
 func LoadFromCache(key string) ([]dns.RR, bool) {
+	logutil.Logger.Debugf("LoadFromCache: start, key=%s", key)
 	val, found := DnsCache.Get(key)
 	if !found {
+		logutil.Logger.Debugf("LoadFromCache: key=%s not found", key)
 		return nil, false
 	}
 	answers, ok := val.([]dns.RR)
 	if !ok {
+		logutil.Logger.Debugf("LoadFromCache: key=%s found but type assertion failed", key)
 		return nil, false
 	}
+	logutil.Logger.Debugf("LoadFromCache: key=%s found, answers_len=%d", key, len(answers))
 	return answers, true
 }
 
 func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
+	logutil.Logger.Debugf("ResolverWithCache: start, domain=%s, qtype=%d, clientIP=%s", domain, qtype, clientIP)
 	start := time.Now()
 	key := CacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
@@ -76,6 +88,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 			metric.MetricsRecorderInstance.RecordCacheHit()
 			metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, "cached", time.Since(start))
 		}
+		logutil.Logger.Debugf("ResolverWithCache: cache hit for key=%s", key)
+		logutil.Logger.Debug("ResolverWithCache: end (cache hit)")
 		return answers
 	}
 
@@ -99,6 +113,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		if EnableMetrics {
 			metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 		}
+		logutil.Logger.Debugf("ResolverWithCache: no answers for key=%s, status=%s", key, status)
+		logutil.Logger.Debug("ResolverWithCache: end (nxdomain)")
 		return answers
 	}
 
@@ -141,10 +157,13 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	if EnableMetrics {
 		metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 	}
+	logutil.Logger.Debugf("ResolverWithCache: resolved and cached key=%s, ttl=%v", key, ttl)
+	logutil.Logger.Debug("ResolverWithCache: end (resolved)")
 	return answers
 }
 
 func StartCacheStatsLogger() {
+	logutil.Logger.Debug("StartCacheStatsLogger: start")
 	ticker := time.NewTicker(config.DefaultDNSStatslog)
 	go func() {
 		defer ticker.Stop()
@@ -163,12 +182,14 @@ func StartCacheStatsLogger() {
 				if itemCount == 0 {
 					logutil.Logger.Warn("No cache entries found")
 				} else {
-					logutil.Logger.Info("Cache Entries:", itemCount)
+					logutil.Logger.Infof("Cache Entries: %d", itemCount)
 					if EnableMetrics {
 						metric.MetricsRecorderInstance.UpdateCacheSize(itemCount)
 					}
 				}
 			}
+			logutil.Logger.Debug("StartCacheStatsLogger: tick end")
 		}
 	}()
+	logutil.Logger.Debug("StartCacheStatsLogger: end (goroutine started)")
 }
