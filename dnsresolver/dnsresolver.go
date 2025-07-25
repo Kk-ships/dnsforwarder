@@ -36,6 +36,17 @@ func UpdateDNSServersCache() {
 		logutil.Logger.Info("DNS client configured with outbound interface")
 	}
 
+	// Run initial health check immediately
+	dnssource.UpdateDNSServersCache(
+		metricsRecorder,
+		cacheRefresh,
+		config.EnableClientRouting,
+		config.PrivateServers,
+		config.PublicServers,
+		dnsClient,
+		&dnsMsgPool,
+	)
+
 	ticker := time.NewTicker(cacheRefresh)
 	go func() {
 		defer ticker.Stop()
