@@ -30,6 +30,8 @@ ENV GOMAXPROCS=4
 WORKDIR /app
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /app/main .
+# Create cache directory for persistence
 USER 10001:10001
+VOLUME ["/tmp"]
 EXPOSE 53/udp 8080
 CMD ["./main"]

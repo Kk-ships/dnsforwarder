@@ -42,4 +42,9 @@ var (
 
 	// Logging configuration
 	LogLevel = util.GetEnvString("LOG_LEVEL", "info")
+
+	// Cache persistence configuration
+	EnableCachePersistence   = util.GetEnvBool("ENABLE_CACHE_PERSISTENCE", true)
+	CachePersistenceFile     = util.GetEnvString("CACHE_PERSISTENCE_FILE", "/tmp/dns_cache.json")
+	CachePersistenceInterval = util.GetEnvDuration("CACHE_PERSISTENCE_INTERVAL", 5*time.Minute)
 )

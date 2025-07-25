@@ -1,6 +1,9 @@
 package cache
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -24,7 +27,28 @@ var (
 	EnableMetrics       bool
 	EnableClientRouting bool
 	EnableDomainRouting bool
+	persistenceTicker   *time.Ticker
 )
+
+// CacheEntry represents a cache entry for persistence
+type CacheEntry struct {
+	Key        string    `json:"key"`
+	Answers    []string  `json:"answers"` // DNS RR serialized as strings
+	Expiration time.Time `json:"expiration"`
+}
+
+// CacheSnapshot represents the entire cache state for persistence
+type CacheSnapshot struct {
+	Entries   []CacheEntry `json:"entries"`
+	Timestamp time.Time    `json:"timestamp"`
+	Stats     CacheStats   `json:"stats"`
+}
+
+// CacheStats represents cache statistics
+type CacheStats struct {
+	TotalHits     int64 `json:"total_hits"`
+	TotalRequests int64 `json:"total_requests"`
+}
 
 func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, enableClientRouting bool, enableDomainRouting bool) {
 	DnsCache = cache.New(defaultDNSCacheTTL, 2*defaultDNSCacheTTL)
@@ -32,6 +56,12 @@ func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, e
 	EnableMetrics = enableMetrics
 	EnableClientRouting = enableClientRouting
 	EnableDomainRouting = enableDomainRouting
+	// Load cache from disk if persistence is enabled
+	if err := LoadCacheFromFile(); err != nil {
+		logutil.Logger.Errorf("Failed to load cache from file: %v", err)
+	}
+	// Start periodic cache persistence
+	StartCachePersistence()
 }
 
 func CacheKey(domain string, qtype uint16) string {
@@ -133,6 +163,175 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 	}
 	return answers
+}
+
+// SaveCacheToFile persists the current cache state to disk
+func SaveCacheToFile() error {
+	if !config.EnableCachePersistence || DnsCache == nil {
+		return nil
+	}
+
+	logutil.Logger.Debug("Starting cache persistence to disk")
+
+	items := DnsCache.Items()
+	entries := make([]CacheEntry, 0, len(items))
+
+	for key, item := range items {
+		// Check if the item has expired
+		if item.Expiration > 0 && time.Now().After(time.Unix(0, item.Expiration)) {
+			continue // Skip expired items
+		}
+
+		answers, ok := item.Object.([]dns.RR)
+		if !ok {
+			logutil.Logger.Warnf("Failed to cast cache item for key %s", key)
+			continue
+		}
+
+		// Serialize DNS RRs to strings
+		answerStrings := make([]string, len(answers))
+		for i, rr := range answers {
+			answerStrings[i] = rr.String()
+		}
+
+		expiration := time.Time{}
+		if item.Expiration > 0 {
+			expiration = time.Unix(0, item.Expiration)
+		}
+
+		entries = append(entries, CacheEntry{
+			Key:        key,
+			Answers:    answerStrings,
+			Expiration: expiration,
+		})
+	}
+
+	snapshot := CacheSnapshot{
+		Entries:   entries,
+		Timestamp: time.Now(),
+		Stats: CacheStats{
+			TotalHits:     atomic.LoadInt64(&cacheHits),
+			TotalRequests: atomic.LoadInt64(&cacheRequests),
+		},
+	}
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("failed to marshal cache data: %w", err)
+	}
+
+	err = os.WriteFile(config.CachePersistenceFile, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write cache file: %w", err)
+	}
+
+	logutil.Logger.Infof("Cache persisted to disk: %d entries saved to %s", len(entries), config.CachePersistenceFile)
+	return nil
+}
+
+// LoadCacheFromFile loads the cache state from disk
+func LoadCacheFromFile() error {
+	if !config.EnableCachePersistence {
+		return nil
+	}
+
+	if _, err := os.Stat(config.CachePersistenceFile); os.IsNotExist(err) {
+		logutil.Logger.Info("No cache persistence file found, starting with empty cache")
+		return nil
+	}
+
+	logutil.Logger.Debug("Loading cache from disk")
+
+	data, err := os.ReadFile(config.CachePersistenceFile)
+	if err != nil {
+		return fmt.Errorf("failed to read cache file: %w", err) // Return error if file read fails
+	}
+
+	var snapshot CacheSnapshot
+	err = json.Unmarshal(data, &snapshot)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal cache data: %w", err)
+	}
+	// Check if the cache file is too old (older than 1 hour)
+	if time.Since(snapshot.Timestamp) > 1*time.Hour {
+		logutil.Logger.Warn("Cache persistence file is too old, starting with empty cache")
+		return nil
+	}
+	loadedCount := 0
+	for _, entry := range snapshot.Entries {
+		// Skip expired entries
+		if !entry.Expiration.IsZero() && time.Now().After(entry.Expiration) {
+			continue
+		}
+
+		// Parse DNS RRs from strings
+		answers := make([]dns.RR, 0, len(entry.Answers))
+		for _, answerStr := range entry.Answers {
+			rr, err := dns.NewRR(answerStr)
+			if err != nil {
+				logutil.Logger.Warnf("Failed to parse DNS RR '%s': %v", answerStr, err)
+				continue
+			}
+			answers = append(answers, rr)
+		}
+
+		if len(answers) > 0 {
+			// Calculate remaining TTL
+			var ttl time.Duration
+			if entry.Expiration.IsZero() {
+				continue // Skip if no expiration time is set
+			} else {
+				ttl = time.Until(entry.Expiration)
+				if ttl <= 0 {
+					continue // Skip if already expired
+				}
+			}
+
+			DnsCache.Set(entry.Key, answers, ttl)
+			loadedCount++
+		}
+	}
+
+	// Restore statistics
+	atomic.StoreInt64(&cacheHits, snapshot.Stats.TotalHits)
+	atomic.StoreInt64(&cacheRequests, snapshot.Stats.TotalRequests)
+
+	logutil.Logger.Infof("Cache loaded from disk: %d entries restored from %s", loadedCount, config.CachePersistenceFile)
+	return nil
+}
+
+// StartCachePersistence starts the periodic cache persistence
+func StartCachePersistence() {
+	if !config.EnableCachePersistence {
+		return
+	}
+
+	persistenceTicker = time.NewTicker(config.CachePersistenceInterval)
+	go func() {
+		defer persistenceTicker.Stop()
+		for range persistenceTicker.C {
+			if err := SaveCacheToFile(); err != nil {
+				logutil.Logger.Errorf("Failed to persist cache: %v", err)
+			}
+		}
+	}()
+
+	logutil.Logger.Infof("Cache persistence enabled with interval: %v", config.CachePersistenceInterval)
+}
+
+// StopCachePersistence stops the periodic cache persistence and saves one final time
+func StopCachePersistence() {
+	if persistenceTicker != nil {
+		persistenceTicker.Stop()
+	}
+
+	if config.EnableCachePersistence {
+		if err := SaveCacheToFile(); err != nil {
+			logutil.Logger.Errorf("Failed to save cache during shutdown: %v", err)
+		} else {
+			logutil.Logger.Info("Cache saved successfully during shutdown")
+		}
+	}
 }
 
 func StartCacheStatsLogger() {

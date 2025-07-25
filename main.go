@@ -93,6 +93,10 @@ func StartDNSServer() {
 	select {
 	case sig := <-sigCh:
 		logutil.Logger.Infof("Received signal %s, shutting down DNS server gracefully...", sig)
+
+		// Stop cache persistence and save final state
+		cache.StopCachePersistence()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.ShutdownContext(ctx); err != nil {
