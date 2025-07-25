@@ -48,4 +48,19 @@ var (
 	CachePersistenceFile     = util.GetEnvString("CACHE_PERSISTENCE_FILE", "/app/cache/dns_cache.json")
 	CachePersistenceInterval = util.GetEnvDuration("CACHE_PERSISTENCE_INTERVAL", 5*time.Minute)
 	CachePersistenceMaxAge   = util.GetEnvDuration("CACHE_PERSISTENCE_MAX_AGE", 1*time.Hour)
+
+	// Multiple interface and routing configuration
+	ListenInterfaces     = util.GetEnvStringSlice("LISTEN_INTERFACES", "")   // Comma-separated list of interfaces to listen on (e.g., "eth0,eth1")
+	OutboundInterface    = util.GetEnvString("OUTBOUND_INTERFACE", "")       // Outbound interface for upstream queries
+	BindToInterface      = util.GetEnvBool("BIND_TO_INTERFACE", false)       // Whether to bind to specific interfaces
+	DefaultListenAddress = util.GetEnvString("LISTEN_ADDRESS", "0.0.0.0:53") // Default listen address if no interfaces specified
+
+	// PID file configuration
+	EnablePIDFile = util.GetEnvBool("ENABLE_PID_FILE", false)
+	PIDFilePath   = util.GetEnvString("PID_FILE_PATH", "/var/run/dnsforwarder.pid")
+
+	// EDNS Client Subnet configuration
+	EnableEDNSClientSubnet = util.GetEnvBool("ENABLE_EDNS_CLIENT_SUBNET", false)
+	EDNSClientSubnetScope  = util.GetEnvInt("EDNS_CLIENT_SUBNET_SCOPE", 24) // Default subnet scope for IPv4
+	ForwardClientIP        = util.GetEnvBool("FORWARD_CLIENT_IP", true)     // Whether to forward real client IP in EDNS
 )

@@ -4,6 +4,9 @@
 A high-performance, cache-enabled DNS forwarder written in Go. This project forwards DNS queries to upstream servers, caches responses for improved performance, and provides detailed logging, statistics, and flexible routing features.
 
 ## What's New
+- **Multiple Interface Support:** Configure specific network interfaces for listening to DNS queries and routing upstream requests, perfect for multi-homed systems and network segregation.
+- **PID File Management:** Generate and manage PID files for integration with monitoring tools like Monit, Zabbix, and systemd for better process management.
+- **EDNS Client Subnet Support:** Forward real client IP addresses to upstream DNS servers using EDNS Client Subnet (RFC 7871) for better geolocation-aware responses.
 - **Cache Persistence (Hot Start):** DNS cache is now persisted to disk and automatically restored on container restarts, providing faster response times after restarts. Cache for hot restart is valid for 1 hour only.
 - **Folder-based Domain Routing:** Load domain routing rules from all `.txt` files in a specified folder, making management and updates easier.
 - **Hot-Reload Domain Routing Table:** Automatically refresh domain routing rules at a configurable interval without restarting the service.
@@ -13,6 +16,9 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 
 ## Features
 - **DNS Forwarding:** Forwards DNS queries to one or more upstream DNS servers.
+- **Multiple Interface Support:** Bind to specific network interfaces for inbound DNS queries and configure separate outbound interfaces for upstream requests.
+- **PID File Management:** Automatic PID file creation and cleanup for integration with process monitoring tools.
+- **EDNS Client Subnet:** Forward real client IP addresses to upstream servers for better geolocation-aware DNS responses.
 - **Client-Based Routing:** Route different clients to different upstream DNS servers (private/public).
 - **Domain Routing (Folder-Based):** Forward DNS queries for specific domains to designated upstream servers using rules from all `.txt` files in a folder.
 - **Hot-Reload Routing Table:** Automatically refresh domain routing rules at a configurable interval.
@@ -64,6 +70,49 @@ Start with:
 docker compose up --build
 ```
 
+#### Docker Considerations for Interface Binding
+
+When using the interface binding features (`LISTEN_INTERFACES`, `OUTBOUND_INTERFACE`, `BIND_TO_INTERFACE`), you need to consider Docker networking:
+
+**Option 1: Host Networking (Recommended for Interface Binding)**
+```yaml
+services:
+  app:
+    network_mode: "host"
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+```
+
+**Option 2: Bridge Networking (Limited Interface Control)**
+```yaml
+services:
+  app:
+    ports:
+      - "53:53/udp"
+      - "8080:8080"
+    # Inside container, typically only eth0 is available
+```
+
+**Configuration for Docker:**
+- **Host Networking:** Interface names refer to host interfaces (e.g., `eth0`, `wlan0`)
+- **Bridge Networking:** Interface names refer to container interfaces (typically `eth0` only)
+- **Privileges Required:** Interface binding requires `privileged: true` and specific capabilities
+
+**Simple Setup (No Interface Binding):**
+```sh
+# Use the simple configuration for basic DNS forwarding
+docker compose -f docker-compose.simple.yml up --build
+```
+
+**Advanced Setup (With Interface Binding):**
+```sh
+# Use the full configuration for interface binding features
+docker compose up --build
+```
+
 ---
 
 ### 4. Configuration
@@ -99,7 +148,22 @@ ENABLE_DOMAIN_ROUTING=true
 DOMAIN_ROUTING_FOLDER=/etc/dnsforwarder/domain-routes
 DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
 
-# Cache Persistence (Optional)
+# Multiple Interface and Routing Configuration (Optional)
+LISTEN_INTERFACES=eth0,eth1
+OUTBOUND_INTERFACE=eth0
+BIND_TO_INTERFACE=false
+LISTEN_ADDRESS=0.0.0.0:53
+
+# PID File Management (Optional)
+ENABLE_PID_FILE=true
+PID_FILE_PATH=/var/run/dnsforwarder.pid
+
+# EDNS Client Subnet Configuration (Optional)
+ENABLE_EDNS_CLIENT_SUBNET=true
+EDNS_CLIENT_SUBNET_SCOPE=24
+FORWARD_CLIENT_IP=true
+
+# Cache Persistence Configuration (Optional)
 ENABLE_CACHE_PERSISTENCE=true
 CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
 CACHE_PERSISTENCE_INTERVAL=5m
@@ -144,6 +208,21 @@ LOG_LEVEL=info
 - **CACHE_PERSISTENCE_FILE:** Path to the cache persistence file (default `/app/cache/dns_cache.json`).
 - **CACHE_PERSISTENCE_INTERVAL:** How often to save cache to disk (default `5m`).
 - **CACHE_PERSISTENCE_MAX_AGE:** Maximum age of cache file before it's considered stale and ignored (default `1h`).
+
+#### Multiple Interface Configuration
+- **LISTEN_INTERFACES:** Comma-separated list of network interfaces to bind for listening (e.g., `eth0,eth1`).
+- **OUTBOUND_INTERFACE:** Network interface to use for outbound upstream DNS queries.
+- **BIND_TO_INTERFACE:** Enable binding to specific network interfaces (default `false`).
+- **LISTEN_ADDRESS:** Default listen address when no specific interfaces are configured (default `0.0.0.0:53`).
+
+#### PID File Configuration
+- **ENABLE_PID_FILE:** Enable automatic PID file creation and management (default `false`).
+- **PID_FILE_PATH:** Path where the PID file will be created (default `/var/run/dnsforwarder.pid`).
+
+#### EDNS Client Subnet Configuration
+- **ENABLE_EDNS_CLIENT_SUBNET:** Enable EDNS Client Subnet support for forwarding client IP information (default `false`).
+- **EDNS_CLIENT_SUBNET_SCOPE:** Subnet scope for IPv4 addresses in CIDR notation (default `24`).
+- **FORWARD_CLIENT_IP:** Whether to forward client IP addresses in EDNS queries (default `true`).
 
 ### 5. Client-Based DNS Routing
 
@@ -214,6 +293,124 @@ PUBLIC_ONLY_CLIENT_MACS=11:22:33:44:55:66           # Guest device (by MAC)
 - **Reliability:** Automatic fallback ensures DNS always works
 - **Performance:** Private servers first, public as backup
 - **Monitoring:** All DNS routing decisions are logged and can be monitored via Prometheus metrics
+
+## Advanced Features
+
+### Multiple Interface Support
+
+The DNS forwarder supports binding to specific network interfaces for both inbound DNS queries and outbound upstream requests. This is particularly useful in multi-homed systems, network segregation scenarios, and when you need to control which network interface is used for different types of traffic.
+
+#### Configuration
+
+```bash
+# Bind to specific interfaces for listening (comma-separated)
+LISTEN_INTERFACES=eth0,eth1
+# Use specific interface for outbound upstream queries
+OUTBOUND_INTERFACE=eth0
+# Enable interface binding (requires appropriate permissions)
+BIND_TO_INTERFACE=true
+# Default listen address if no specific interfaces configured
+LISTEN_ADDRESS=0.0.0.0:53
+```
+
+#### Use Cases
+- **Network Segregation:** Listen on internal interfaces only while using a specific outbound interface for upstream queries
+- **Multi-homed Systems:** Control which network interface handles DNS traffic
+- **Security:** Restrict DNS service to specific network segments
+- **Performance:** Use faster network interfaces for upstream queries
+
+#### Socket Binding Implementation
+
+The interface binding feature uses platform-specific socket options to bind DNS listeners to specific network interfaces:
+
+**Linux:** Uses `SO_BINDTODEVICE` socket option
+**macOS/Darwin:** Uses `IP_BOUND_IF` and `IPV6_BOUND_IF` socket options
+**Windows:** Limited support (placeholder implementation)
+
+#### Requirements
+
+- **Root Privileges:** Socket interface binding typically requires root/administrator privileges
+- **Network Interfaces:** Specified interfaces must exist and be in UP state
+- **Platform Support:** Works best on Linux and macOS; limited on Windows
+
+#### Testing Socket Binding
+
+The application automatically tests socket binding capabilities on startup when `BIND_TO_INTERFACE=true`:
+
+```
+INFO Interface binding capabilities: map[platform:linux binding_enabled:true socket_binding_available:true running_as_root:true]
+INFO Socket binding test successful with interface eth0
+```
+
+If socket binding fails, you'll see warnings like:
+```
+WARN Socket binding test failed: socket binding test failed: operation not permitted (hint: may require root privileges)
+WARN Interface binding may not work properly. Consider running as root or disabling interface binding.
+```
+
+### PID File Management
+
+Automatic PID file creation and management for integration with process monitoring tools like Monit, Zabbix, systemd, and other process managers.
+
+#### Configuration
+
+```bash
+# Enable PID file creation
+ENABLE_PID_FILE=true
+# Path where PID file will be created
+PID_FILE_PATH=/var/run/dnsforwarder.pid
+```
+
+#### Features
+- **Automatic Creation:** PID file is created on startup
+- **Stale File Detection:** Automatically removes stale PID files from previous runs
+- **Process Validation:** Checks if process is still running before creating new PID file
+- **Graceful Cleanup:** PID file is automatically removed on graceful shutdown
+- **Monitoring Integration:** Compatible with Monit, Zabbix, systemd, and other monitoring tools
+
+#### Example Monit Configuration
+
+```
+check process dnsforwarder with pidfile /var/run/dnsforwarder.pid
+  start program = "/usr/local/bin/dnsforwarder"
+  stop program = "/bin/kill -TERM `cat /var/run/dnsforwarder.pid`"
+  if failed port 53 protocol dns then restart
+  if 5 restarts within 5 cycles then timeout
+```
+
+### EDNS Client Subnet Support
+
+Forward real client IP addresses to upstream DNS servers using EDNS Client Subnet (RFC 7871) for geolocation-aware DNS responses. This improves the accuracy of CDN and geolocation-based DNS responses.
+
+#### Configuration
+
+```bash
+# Enable EDNS Client Subnet
+ENABLE_EDNS_CLIENT_SUBNET=true
+# IPv4 subnet scope (CIDR notation)
+EDNS_CLIENT_SUBNET_SCOPE=24
+# Forward client IP in EDNS
+FORWARD_CLIENT_IP=true
+```
+
+#### How It Works
+1. **Client IP Detection:** Extracts real client IP from DNS queries
+2. **EDNS Option Addition:** Adds EDNS Client Subnet option to upstream queries
+3. **Upstream Compatibility:** Automatically detects upstream servers that support EDNS Client Subnet
+4. **Response Processing:** Processes EDNS responses and strips client subnet information before returning to clients
+5. **Privacy Protection:** Only forwards subnet information, not exact client IPs
+
+#### Supported Upstream Providers
+- Cloudflare (1.1.1.1)
+- Google Public DNS (8.8.8.8, 8.8.4.4)
+- OpenDNS (208.67.222.222, 208.67.220.220)
+- Other public DNS providers that support RFC 7871
+
+#### Benefits
+- **Better CDN Performance:** CDNs receive more accurate location information
+- **Improved Geolocation:** Location-based services work more accurately
+- **Enhanced User Experience:** Faster content delivery through optimal server selection
+- **Privacy Conscious:** Forwards subnet ranges, not exact IP addresses
 
 ## Domain Routing
 

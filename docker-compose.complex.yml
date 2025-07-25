@@ -1,0 +1,45 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.complex
+      args:
+        TARGETOS: linux
+        TARGETARCH: amd64
+    ports:
+      - "53:53/udp"
+      - "8080:8080" # Optional: Expose metrics on port 8080
+    env_file:
+      - .env
+    restart: always
+    environment:
+      - TZ=Asia/Kolkata
+    # Use root for interface binding and PID file operations
+    # Comment out the next line if not using interface binding features
+    user: root
+    # Network configuration for interface binding
+    network_mode: "host" # Required for interface binding to work properly
+    # Alternative: Use specific network if you don't want host networking
+    # networks:
+    #   - dns_network
+    # Privileged mode required for interface binding operations
+    privileged: true # Required for binding to specific network interfaces
+    # Add capabilities for network operations
+    cap_add:
+      - NET_ADMIN      # Required for network interface operations
+      - NET_RAW        # Required for raw socket operations
+      - SYS_ADMIN      # May be required for some interface operations
+    volumes:
+      - ./domain-routes/:/etc/dnsforwarder/domain-routes/:ro # Mount folder as read-only (recommended) # optional, required for custom domain routes
+      # Add more folders/files as needed for custom domain routes
+      - ./cache-data/:/app/cache/:rw # Mount cache persistence directory (Optional)
+      # Mount PID file directory if using PID files
+      - ./run/:/var/run/:rw # Optional: for PID file management
+
+# Alternative network configuration (uncomment if not using host networking)
+# networks:
+#   dns_network:
+#     driver: bridge
+#     ipam:
+#       config:
+#         - subnet: 172.20.0.0/16

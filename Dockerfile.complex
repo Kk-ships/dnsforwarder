@@ -1,0 +1,61 @@
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+
+FROM golang:alpine AS builder
+RUN apk add -U tzdata
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod/ \
+    --mount=type=bind,source=go.sum,target=go.sum \
+    --mount=type=bind,source=go.mod,target=go.mod \
+    go mod download -x
+ENV GOCACHE=/root/.cache/go-build
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod/ \
+    --mount=type=cache,target="/root/.cache/go-build" \
+    CGO_ENABLED=0 \
+    GOOS=${TARGETOS} \
+    GOARCH=${TARGETARCH} \
+    go build \
+    -ldflags="-s -w" \
+    -trimpath \
+    -buildvcs=false \
+    -tags netgo \
+    -o main .
+# Run stage
+FROM alpine:latest AS final
+# Install necessary packages for network operations and interface binding
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    net-tools \
+    iproute2 \
+    bind-tools \
+    && rm -rf /var/cache/apk/*
+
+ENV TZ=UTC
+ENV GOGC=100
+ENV GOMAXPROCS=4
+
+# Create necessary users
+RUN adduser -D -s /bin/sh -u 1000 nonroot \
+    && mkdir -p /var/run \
+    && mkdir -p /app/cache \
+    && chown -R nonroot:nonroot /app \
+    && chmod 755 /var/run
+
+WORKDIR /app
+COPY --from=builder /app/main .
+
+# Create volumes for cache and PID files
+VOLUME ["/app/cache", "/var/run"]
+
+# Make the binary executable
+RUN chmod +x ./main
+
+EXPOSE 53/udp 8080
+
+# Default to running as non-root, but can be overridden in docker-compose for interface binding
+USER nonroot
+
+CMD ["./main"]

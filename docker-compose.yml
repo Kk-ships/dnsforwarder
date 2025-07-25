@@ -2,6 +2,7 @@ services:
   app:
     build:
       context: .
+      dockerfile: Dockerfile
       args:
         TARGETOS: linux
         TARGETARCH: amd64
@@ -13,8 +14,12 @@ services:
     restart: always
     environment:
       - TZ=Asia/Kolkata
-    user: root # Run as root if using cache persistence (use non-root user if not)
+    # Run as root user if cache persistence or PID file management is needed
+    user: nonroot
     volumes:
       - ./domain-routes/:/etc/dnsforwarder/domain-routes/:ro # Mount folder as read-only (recommended) # optional, required for custom domain routes
       # Add more folders/files as needed for custom domain routes
       - ./cache-data/:/app/cache/:rw # Mount cache persistence directory (Optional)
+
+# For users who need interface binding features, use docker-compose.yml instead
+# This configuration is more secure but doesn't support interface binding
