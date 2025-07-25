@@ -16,4 +16,4 @@ services:
     volumes:
       - ./domain-routes/:/etc/dnsforwarder/domain-routes/:ro # Mount folder as read-only (recommended) # optional, required for custom domain routes
       # Add more folders/files as needed for custom domain routes
-      - ./cache-data/:/tmp/:rw # Mount cache persistence directory (Optional)
+      - ./cache-data/:/app/cache/:rw # Mount cache persistence directory (Optional)

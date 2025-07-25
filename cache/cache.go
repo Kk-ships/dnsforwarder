@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -165,10 +166,76 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	return answers
 }
 
+// ensureCacheDir ensures the cache persistence directory exists and is writable
+func ensureCacheDir() error {
+	if !config.EnableCachePersistence {
+		return nil
+	}
+
+	dir := filepath.Dir(config.CachePersistenceFile)
+
+	// Check if directory exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		// Try to create the directory
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create cache directory %s: %w", dir, err)
+		}
+		logutil.Logger.Infof("Created cache persistence directory: %s", dir)
+	}
+
+	// Test write permissions by creating a temporary file
+	testFile := filepath.Join(dir, ".cache_test")
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		// Try alternative locations if the primary one fails
+		altPaths := []string{
+			"/tmp/dns_cache.json",
+			"./dns_cache.json",
+			"./cache/dns_cache.json",
+		}
+
+		for _, altPath := range altPaths {
+			altDir := filepath.Dir(altPath)
+			if err := os.MkdirAll(altDir, 0755); err != nil {
+				continue
+			}
+
+			testAltFile := filepath.Join(altDir, ".cache_test")
+			if err := os.WriteFile(testAltFile, []byte("test"), 0644); err != nil {
+				continue
+			}
+
+			// Clean up test file
+			err = os.Remove(testAltFile)
+			if err != nil {
+				logutil.Logger.Warnf("Failed to remove test file %s: %v", testAltFile, err)
+			}
+
+			// Update the config to use the working path
+			config.CachePersistenceFile = altPath
+			logutil.Logger.Warnf("Using alternative cache persistence path: %s", altPath)
+			return nil
+		}
+
+		return fmt.Errorf("cache directory %s is not writable and no alternative paths work: %w", dir, err)
+	}
+
+	// Clean up test file
+	if err := os.Remove(testFile); err != nil {
+		logutil.Logger.Warnf("Failed to remove test file %s: %v", testFile, err)
+	}
+
+	return nil
+}
+
 // SaveCacheToFile persists the current cache state to disk
 func SaveCacheToFile() error {
 	if !config.EnableCachePersistence || DnsCache == nil {
 		return nil
+	}
+
+	// Ensure cache directory exists and is writable
+	if err := ensureCacheDir(); err != nil {
+		return fmt.Errorf("cache directory check failed: %w", err)
 	}
 
 	logutil.Logger.Debug("Starting cache persistence to disk")
@@ -233,6 +300,11 @@ func SaveCacheToFile() error {
 func LoadCacheFromFile() error {
 	if !config.EnableCachePersistence {
 		return nil
+	}
+
+	// Ensure cache directory exists and is writable (for future saves)
+	if err := ensureCacheDir(); err != nil {
+		logutil.Logger.Warnf("Cache directory check failed, but continuing to load: %v", err)
 	}
 
 	if _, err := os.Stat(config.CachePersistenceFile); os.IsNotExist(err) {
@@ -303,6 +375,12 @@ func LoadCacheFromFile() error {
 // StartCachePersistence starts the periodic cache persistence
 func StartCachePersistence() {
 	if !config.EnableCachePersistence {
+		return
+	}
+
+	// Test cache persistence once during startup
+	if err := ensureCacheDir(); err != nil {
+		logutil.Logger.Errorf("Cache persistence disabled due to directory issues: %v", err)
 		return
 	}
 

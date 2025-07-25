@@ -101,7 +101,7 @@ DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
 
 # Cache Persistence (Optional)
 ENABLE_CACHE_PERSISTENCE=true
-CACHE_PERSISTENCE_FILE=/tmp/dns_cache.json
+CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
 CACHE_PERSISTENCE_INTERVAL=5m
 
 # Logger Configuration
@@ -140,7 +140,7 @@ LOG_LEVEL=info
 
 #### Cache Persistence Configuration
 - **ENABLE_CACHE_PERSISTENCE:** Enable cache persistence to disk for hot starts (default `true`).
-- **CACHE_PERSISTENCE_FILE:** Path to the cache persistence file (default `/tmp/dns_cache.json`).
+- **CACHE_PERSISTENCE_FILE:** Path to the cache persistence file (default `/app/cache/dns_cache.json`).
 - **CACHE_PERSISTENCE_INTERVAL:** How often to save cache to disk (default `5m`).
 
 ### 5. Client-Based DNS Routing
@@ -255,6 +255,20 @@ address=/internal.corp/10.10.1.1
 - Check logs for messages about domain routing initialization and file loading errors.
 - Make sure the file paths in `DOMAIN_ROUTING_FOLDER` are correct and accessible by the DNS forwarder.
 - Ensure each rule is in the correct format and not commented out.
+
+#### Cache Persistence Issues
+If you see "permission denied" errors for cache persistence:
+1. **Docker/Container**: Ensure the cache directory is properly mounted and writable:
+   ```yaml
+   volumes:
+     - ./cache-data/:/app/cache/:rw
+   ```
+2. **File Path**: Use the `CACHE_PERSISTENCE_FILE` environment variable to specify a writable location:
+   ```bash
+   CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
+   ```
+3. **Disable if needed**: Set `ENABLE_CACHE_PERSISTENCE=false` to disable persistence entirely.
+4. **Alternative paths**: The application will automatically try alternative paths (`/tmp`, `./`) if the primary path fails.
 
 ---
 
