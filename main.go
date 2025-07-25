@@ -10,22 +10,13 @@ import (
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
-	"log"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"dnsloadbalancer/metric"
-
 	"github.com/miekg/dns"
 )
-
-var MetricsRecorder = metric.MetricsRecorderInstance
-var StartMetricsUpdater = metric.StartMetricsUpdater
-var StartMetricsServer = metric.StartMetricsServer
 
 type dnsHandler struct{}
 
@@ -50,7 +41,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	if err := w.WriteMsg(msg); err != nil {
 		if config.EnableMetrics {
-			MetricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
+			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
 		}
 		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 	}
@@ -61,9 +52,9 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: start")
 	// --- Initialization ---
-	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, MetricsRecorder, config.EnableClientRouting, config.EnableDomainRouting)
+	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, metricsRecorder, config.EnableClientRouting, config.EnableDomainRouting)
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
-	dnssource.InitDNSSource(MetricsRecorder)
+	dnssource.InitDNSSource(metricsRecorder)
 	logutil.Logger.Debug("StartDNSServer: dns source initialized")
 	done := make(chan struct{})
 	go func() {
@@ -123,13 +114,6 @@ func StartDNSServer() {
 }
 
 func main() {
-	if os.Getenv("APP_ENV") == "development" {
-		log.Println("Enabling pprof for profiling")
-		go func() {
-			log.Println(http.ListenAndServe("localhost:6060", nil))
-		}()
-	}
-
 	logutil.Logger.Debug("main: start")
 	StartDNSServer()
 	logutil.Logger.Debug("main: end")
