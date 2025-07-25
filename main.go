@@ -29,7 +29,8 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	logutil.Logger.Debug("ServeDNS: start")
 	msg := new(dns.Msg)
 	msg.SetReply(r)
-	msg.Authoritative = true
+	msg.Authoritative = false     // We're a forwarder, not authoritative
+	msg.RecursionAvailable = true // We provide recursion
 
 	if len(r.Question) > 0 {
 		q := r.Question[0]
@@ -49,7 +50,9 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		)
 		if answers != nil {
 			msg.Answer = answers
-			logutil.Logger.Debugf("ServeDNS: got answers for %s", q.Name)
+			logutil.Logger.Debugf("ServeDNS: got %d answers for %s", len(answers), q.Name)
+		} else {
+			logutil.Logger.Warnf("ServeDNS: no answers found for %s (qtype=%d)", q.Name, q.Qtype)
 		}
 	}
 
@@ -119,6 +122,12 @@ func StartDNSServer() {
 	dnsresolver.UpdateDNSServersCache()
 	logutil.Logger.Debug("StartDNSServer: dns servers cache updated")
 	logutil.Logger.Infof("DNS servers cache updated with private: %v, public: %v", dnssource.PrivateServersCache, dnssource.PublicServersCache)
+
+	// Debug: Check if DNS servers are properly configured
+	logutil.Logger.Infof("Configuration - Private DNS servers: %v", config.PrivateServers)
+	logutil.Logger.Infof("Configuration - Public DNS servers: %v", config.PublicServers)
+	logutil.Logger.Infof("Configuration - Client routing enabled: %v", config.EnableClientRouting)
+	logutil.Logger.Infof("Configuration - Domain routing enabled: %v", config.EnableDomainRouting)
 	domainrouting.InitializeDomainRouting()
 	logutil.Logger.Debug("StartDNSServer: domain routing initialized")
 	clientrouting.InitializeClientRouting()
