@@ -4,6 +4,7 @@
 A high-performance, cache-enabled DNS forwarder written in Go. This project forwards DNS queries to upstream servers, caches responses for improved performance, and provides detailed logging, statistics, and flexible routing features.
 
 ## What's New
+- **Cache Persistence (Hot Start):** DNS cache is now persisted to disk and automatically restored on container restarts, providing faster response times after restarts. Cache for hot restart is valid for 1 hour only.
 - **Folder-based Domain Routing:** Load domain routing rules from all `.txt` files in a specified folder, making management and updates easier.
 - **Hot-Reload Domain Routing Table:** Automatically refresh domain routing rules at a configurable interval without restarting the service.
 - **Enhanced Configuration:** All major parameters (DNS servers, cache TTL, ports, metrics, routing folders, reload intervals, etc.) are configurable via environment variables or a `.env` file.
@@ -16,6 +17,7 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 - **Domain Routing (Folder-Based):** Forward DNS queries for specific domains to designated upstream servers using rules from all `.txt` files in a folder.
 - **Hot-Reload Routing Table:** Automatically refresh domain routing rules at a configurable interval.
 - **Caching:** Uses an in-memory cache to store DNS responses, reducing latency and upstream load.
+- **Cache Persistence:** Automatically saves and restores cache to/from disk for hot starts after container restarts.
 - **Health Checks:** Periodically checks upstream DNS server reachability and only uses healthy servers.
 - **Statistics:** Logs DNS usage and cache hit/miss rates.
 - **Prometheus Metrics:** Comprehensive metrics collection for monitoring and alerting.
@@ -81,7 +83,7 @@ DNS_STATSLOG=1m
 CACHE_SIZE=10000
 DNS_CACHE_TTL=30m
 
-# Metric Configuration
+# Metric Configuration (Optional)
 ENABLE_METRICS=true
 METRICS_PORT=:8080
 METRICS_PATH=/metrics
@@ -96,6 +98,12 @@ PUBLIC_ONLY_CLIENT_MACS=00:11:22:33:44:55,AA:BB:CC:DD:EE:FF
 ENABLE_DOMAIN_ROUTING=true
 DOMAIN_ROUTING_FOLDER=/etc/dnsforwarder/domain-routes
 DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
+
+# Cache Persistence (Optional)
+ENABLE_CACHE_PERSISTENCE=true
+CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
+CACHE_PERSISTENCE_INTERVAL=5m
+CACHE_PERSISTENCE_MAX_AGE=1h
 
 # Logger Configuration
 LOG_LEVEL=info
@@ -130,6 +138,12 @@ LOG_LEVEL=info
 - **ENABLE_DOMAIN_ROUTING:** Enable domain routing (default `false`).
 - **DOMAIN_ROUTING_FOLDER:** Comma-separated list of folders containing routing configuration files
 - **DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL** Domain routing reload interval in seconds
+
+#### Cache Persistence Configuration
+- **ENABLE_CACHE_PERSISTENCE:** Enable cache persistence to disk for hot starts (default `true`).
+- **CACHE_PERSISTENCE_FILE:** Path to the cache persistence file (default `/app/cache/dns_cache.json`).
+- **CACHE_PERSISTENCE_INTERVAL:** How often to save cache to disk (default `5m`).
+- **CACHE_PERSISTENCE_MAX_AGE:** Maximum age of cache file before it's considered stale and ignored (default `1h`).
 
 ### 5. Client-Based DNS Routing
 
@@ -243,6 +257,20 @@ address=/internal.corp/10.10.1.1
 - Check logs for messages about domain routing initialization and file loading errors.
 - Make sure the file paths in `DOMAIN_ROUTING_FOLDER` are correct and accessible by the DNS forwarder.
 - Ensure each rule is in the correct format and not commented out.
+
+#### Cache Persistence Issues
+If you see "permission denied" errors for cache persistence:
+1. **Docker/Container**: Ensure the cache directory is properly mounted and writable:
+   ```yaml
+   volumes:
+     - ./cache-data/:/app/cache/:rw
+   ```
+2. **File Path**: Use the `CACHE_PERSISTENCE_FILE` environment variable to specify a writable location:
+   ```bash
+   CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
+   ```
+3. **Disable if needed**: Set `ENABLE_CACHE_PERSISTENCE=false` to disable persistence entirely.
+4. **Alternative paths**: The application will automatically try alternative paths (`/tmp`, `./`) if the primary path fails.
 
 ---
 

@@ -27,9 +27,13 @@ FROM scratch AS final
 ENV TZ=UTC
 ENV GOGC=100
 ENV GOMAXPROCS=4
+COPY <<EOF /etc/passwd
+root:x:0:0:root:/root:/bin/sh
+nonroot:x:65532:65532:nonroot:/home/nonroot:/bin/sh
+EOF
 WORKDIR /app
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /app/main .
-USER 10001:10001
+VOLUME ["/app/cache"]
 EXPOSE 53/udp 8080
 CMD ["./main"]

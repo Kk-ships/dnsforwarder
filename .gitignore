@@ -24,3 +24,7 @@ go.work.sum
 
 # env file
 .env
+.env*
+
+# Default ignored files
+/.idea/
