@@ -77,14 +77,9 @@ func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
 	return m
 }
 
-func prepareDNSQueryWithClientIP(domain string, qtype uint16, clientIP string) *dns.Msg {
+func prepareDNSQueryWithClientIP(domain string, qtype uint16, _ string) *dns.Msg {
 	m := prepareDNSQuery(domain, qtype)
-
-	// Add EDNS Client Subnet if enabled and client IP is provided
-	if clientIP != "" {
-		ednsManager.AddClientSubnet(m, clientIP)
-	}
-
+	// Note: EDNS Client Subnet is added per-server in exchangeWithServer
 	return m
 }
 
@@ -92,7 +87,7 @@ func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQueryWithClientIP(domain, qtype, clientIP)
 	defer dnsMsgPool.Put(m)
 	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
-	result := upstreamDNSQuery(privateServers, publicServers, m)
+	result := upstreamDNSQuery(privateServers, publicServers, m, clientIP)
 	return result
 }
 
@@ -100,20 +95,20 @@ func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQueryWithClientIP(domain, qtype, clientIP)
 	defer dnsMsgPool.Put(m)
 	if svr, ok := domainrouting.RoutingTable[domain]; ok {
-		result := upstreamDNSQuery([]string{svr}, []string{}, m)
+		result := upstreamDNSQuery([]string{svr}, []string{}, m, clientIP)
 		return result
 	}
 	result := ResolverForClient(domain, qtype, clientIP)
 	return result
 }
 
-func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Msg) []dns.RR {
+func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Msg, clientIP string) []dns.RR {
 	if len(publicServers) == 0 && len(privateServers) == 0 {
 		logutil.Logger.Warn("No upstream DNS servers available")
 		return nil
 	}
 	for _, svr := range privateServers {
-		answer, err := exchangeWithServer(m, svr)
+		answer, err := exchangeWithServerAndClientIP(m, svr, clientIP)
 		if err == nil {
 			return answer
 		}
@@ -124,7 +119,7 @@ func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Ms
 		return nil
 	}
 	for _, svr := range publicServers {
-		answer, err := exchangeWithServer(m, svr)
+		answer, err := exchangeWithServerAndClientIP(m, svr, clientIP)
 		if err == nil {
 			return answer
 		}
@@ -132,13 +127,17 @@ func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Ms
 	return nil
 }
 
-func exchangeWithServer(m *dns.Msg, svr string) ([]dns.RR, error) {
-	// Check if we should add EDNS Client Subnet for this server
-	if ednsManager.ShouldAddClientSubnet(svr) {
-		logutil.Logger.Debugf("Using EDNS Client Subnet for server %s", svr)
+func exchangeWithServerAndClientIP(m *dns.Msg, svr string, clientIP string) ([]dns.RR, error) {
+	// Create a copy of the message for this specific server
+	query := m.Copy()
+
+	// Add EDNS Client Subnet only if this server supports it
+	if ednsManager.ShouldAddClientSubnet(svr) && clientIP != "" {
+		logutil.Logger.Debugf("Adding EDNS Client Subnet for server %s, clientIP %s", svr, clientIP)
+		ednsManager.AddClientSubnet(query, clientIP)
 	}
 
-	response, rtt, err := dnsClient.Exchange(m, svr)
+	response, rtt, err := dnsClient.Exchange(query, svr)
 	if err == nil && response != nil {
 		statsMutex.Lock()
 		dnsUsageStats[svr]++

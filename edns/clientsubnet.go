@@ -46,7 +46,7 @@ func (csm *ClientSubnetManager) AddClientSubnet(msg *dns.Msg, clientIP string) {
 
 	// Create EDNS0 record if it doesn't exist
 	if msg.IsEdns0() == nil {
-		msg.SetEdns0(4096, false)
+		msg.SetEdns0(csm.GetEDNSSize(), false)
 	}
 
 	edns := msg.IsEdns0()
