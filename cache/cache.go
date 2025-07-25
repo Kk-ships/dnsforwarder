@@ -292,7 +292,8 @@ func SaveCacheToFile() error {
 		return fmt.Errorf("failed to write cache file: %w", err)
 	}
 
-	logutil.Logger.Infof("Cache persisted to disk: %d entries saved to %s", len(entries), config.CachePersistenceFile)
+	logutil.Logger.Debugf("Cache persisted to disk: %d entries saved to %s", len(entries),
+		config.CachePersistenceFile)
 	return nil
 }
 
