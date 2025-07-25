@@ -56,12 +56,7 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
 	dnssource.InitDNSSource(metricsRecorder)
 	logutil.Logger.Debug("StartDNSServer: dns source initialized")
-	done := make(chan struct{})
-	go func() {
-		dnsresolver.UpdateDNSServersCache()
-		close(done)
-	}()
-	<-done
+	go dnsresolver.UpdateDNSServersCache()
 	logutil.Logger.Debug("StartDNSServer: dns servers cache updated")
 	logutil.Logger.Infof("DNS servers cache updated with private: %v, public: %v", dnssource.PrivateServersCache, dnssource.PublicServersCache)
 	domainrouting.InitializeDomainRouting()
@@ -69,7 +64,7 @@ func StartDNSServer() {
 	clientrouting.InitializeClientRouting()
 	logutil.Logger.Debug("StartDNSServer: client routing initialized")
 	// Start cache stats and metrics logging in background
-	go cache.StartCacheStatsLogger()
+	cache.StartCacheStatsLogger()
 	if config.EnableMetrics {
 		go StartMetricsServer()
 		go StartMetricsUpdater()
