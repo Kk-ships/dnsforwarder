@@ -24,18 +24,21 @@ var (
 )
 
 func UpdateDNSServersCache() {
-	ticker := time.Tick(cacheRefresh)
-	for range ticker {
-		dnssource.UpdateDNSServersCache(
-			metricsRecorder,
-			cacheRefresh,
-			config.EnableClientRouting,
-			config.PrivateServers,
-			config.PublicServers,
-			dnsClient,
-			&dnsMsgPool,
-		)
-	}
+	ticker := time.NewTicker(cacheRefresh)
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			dnssource.UpdateDNSServersCache(
+				metricsRecorder,
+				cacheRefresh,
+				config.EnableClientRouting,
+				config.PrivateServers,
+				config.PublicServers,
+				dnsClient,
+				&dnsMsgPool,
+			)
+		}
+	}()
 }
 
 func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {

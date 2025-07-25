@@ -56,7 +56,7 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
 	dnssource.InitDNSSource(metricsRecorder)
 	logutil.Logger.Debug("StartDNSServer: dns source initialized")
-	go dnsresolver.UpdateDNSServersCache()
+	dnsresolver.UpdateDNSServersCache()
 	logutil.Logger.Debug("StartDNSServer: dns servers cache updated")
 	logutil.Logger.Infof("DNS servers cache updated with private: %v, public: %v", dnssource.PrivateServersCache, dnssource.PublicServersCache)
 	domainrouting.InitializeDomainRouting()
