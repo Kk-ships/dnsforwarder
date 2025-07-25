@@ -104,6 +104,10 @@ func StartDNSServer() {
 		} else {
 			logutil.Logger.Infof("DNS server shut down gracefully")
 		}
+
+		// Flush any remaining log messages
+		logutil.Logger.Flush()
+
 	case err := <-errCh:
 		if err != nil {
 			logutil.Logger.Fatalf("Failed to start server: %s\n", err.Error())
@@ -116,4 +120,6 @@ func main() {
 	logutil.Logger.Debug("main: start")
 	StartDNSServer()
 	logutil.Logger.Debug("main: end")
+	// Ensure all logs are flushed before exit
+	logutil.Logger.Flush()
 }
