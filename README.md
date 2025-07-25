@@ -103,6 +103,7 @@ DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
 ENABLE_CACHE_PERSISTENCE=true
 CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
 CACHE_PERSISTENCE_INTERVAL=5m
+CACHE_PERSISTENCE_MAX_AGE=1h
 
 # Logger Configuration
 LOG_LEVEL=info
@@ -142,6 +143,7 @@ LOG_LEVEL=info
 - **ENABLE_CACHE_PERSISTENCE:** Enable cache persistence to disk for hot starts (default `true`).
 - **CACHE_PERSISTENCE_FILE:** Path to the cache persistence file (default `/app/cache/dns_cache.json`).
 - **CACHE_PERSISTENCE_INTERVAL:** How often to save cache to disk (default `5m`).
+- **CACHE_PERSISTENCE_MAX_AGE:** Maximum age of cache file before it's considered stale and ignored (default `1h`).
 
 ### 5. Client-Based DNS Routing
 

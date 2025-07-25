@@ -47,4 +47,5 @@ var (
 	EnableCachePersistence   = util.GetEnvBool("ENABLE_CACHE_PERSISTENCE", true)
 	CachePersistenceFile     = util.GetEnvString("CACHE_PERSISTENCE_FILE", "/app/cache/dns_cache.json")
 	CachePersistenceInterval = util.GetEnvDuration("CACHE_PERSISTENCE_INTERVAL", 5*time.Minute)
+	CachePersistenceMaxAge   = util.GetEnvDuration("CACHE_PERSISTENCE_MAX_AGE", 1*time.Hour)
 )

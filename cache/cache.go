@@ -34,8 +34,8 @@ var (
 // CacheEntry represents a cache entry for persistence
 type CacheEntry struct {
 	Key        string    `json:"key"`
-	Answers    []string  `json:"answers"` // DNS RR serialized as strings
-	Expiration time.Time `json:"expiration"`
+	Answers    []string  `json:"answers"`    // DNS RR serialized as strings
+	Expiration time.Time `json:"expiration"` // Zero time means no expiration
 }
 
 // CacheSnapshot represents the entire cache state for persistence
@@ -243,9 +243,12 @@ func SaveCacheToFile() error {
 	items := DnsCache.Items()
 	entries := make([]CacheEntry, 0, len(items))
 
+	// Capture current time once to avoid repeated time.Now() calls
+	now := time.Now()
+
 	for key, item := range items {
 		// Check if the item has expired
-		if item.Expiration > 0 && time.Now().After(time.Unix(0, item.Expiration)) {
+		if item.Expiration > 0 && now.After(time.Unix(0, item.Expiration)) {
 			continue // Skip expired items
 		}
 
@@ -261,10 +264,11 @@ func SaveCacheToFile() error {
 			answerStrings[i] = rr.String()
 		}
 
-		expiration := time.Time{}
+		var expiration time.Time
 		if item.Expiration > 0 {
 			expiration = time.Unix(0, item.Expiration)
 		}
+		// Note: Zero expiration time means the item never expires
 
 		entries = append(entries, CacheEntry{
 			Key:        key,
@@ -325,15 +329,20 @@ func LoadCacheFromFile() error {
 	if err != nil {
 		return fmt.Errorf("failed to unmarshal cache data: %w", err)
 	}
-	// Check if the cache file is too old (older than 1 hour)
-	if time.Since(snapshot.Timestamp) > 1*time.Hour {
-		logutil.Logger.Warn("Cache persistence file is too old, starting with empty cache")
+	// Check if the cache file is too old
+	if time.Since(snapshot.Timestamp) > config.CachePersistenceMaxAge {
+		logutil.Logger.Warnf("Cache persistence file is too old (%v > %v), starting with empty cache",
+			time.Since(snapshot.Timestamp), config.CachePersistenceMaxAge)
 		return nil
 	}
 	loadedCount := 0
+
+	// Capture current time once to avoid repeated time.Now() calls
+	now := time.Now()
+
 	for _, entry := range snapshot.Entries {
 		// Skip expired entries
-		if !entry.Expiration.IsZero() && time.Now().After(entry.Expiration) {
+		if !entry.Expiration.IsZero() && now.After(entry.Expiration) {
 			continue
 		}
 
@@ -352,7 +361,8 @@ func LoadCacheFromFile() error {
 			// Calculate remaining TTL
 			var ttl time.Duration
 			if entry.Expiration.IsZero() {
-				continue // Skip if no expiration time is set
+				// Zero expiration means no expiration, use default TTL
+				ttl = DefaultDNSCacheTTL
 			} else {
 				ttl = time.Until(entry.Expiration)
 				if ttl <= 0 {
