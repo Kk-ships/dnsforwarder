@@ -41,7 +41,6 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					Option: o.Option,
 				}
 				newOpt.SetUDPSize(o.UDPSize())
-				newOpt.SetDo() // Make sure DO bit is set
 				msg.Extra = append(msg.Extra, newOpt)
 			}
 		}
@@ -66,8 +65,11 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			q.Name, q.Qtype, clientIP,
 		)
 		if answers != nil {
-			msg.Answer = answers
-			logutil.Logger.Debugf("ServeDNS: got %d answers for %s", len(answers), q.Name)
+			msg.Answer = answers.Answer // Answer section
+			// Set authority and additional sections if available
+			msg.Ns = answers.Ns       // Authority section!
+			msg.Extra = answers.Extra // Additional section, where RRSIG often is
+			logutil.Logger.Debugf("ServeDNS: got %d answers for %s", len(answers.Answer), q.Name)
 		} else {
 			logutil.Logger.Warnf("ServeDNS: no answers found for %s (qtype=%d)", q.Name, q.Qtype)
 		}

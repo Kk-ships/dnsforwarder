@@ -83,7 +83,7 @@ func prepareDNSQueryWithClientIP(domain string, qtype uint16, _ string) *dns.Msg
 	return m
 }
 
-func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
+func ResolverForClient(domain string, qtype uint16, clientIP string) *dns.Msg {
 	m := prepareDNSQueryWithClientIP(domain, qtype, clientIP)
 	defer dnsMsgPool.Put(m)
 	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
@@ -91,7 +91,7 @@ func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	return result
 }
 
-func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
+func ResolverForDomain(domain string, qtype uint16, clientIP string) *dns.Msg {
 	m := prepareDNSQueryWithClientIP(domain, qtype, clientIP)
 	defer dnsMsgPool.Put(m)
 	if svr, ok := domainrouting.RoutingTable[domain]; ok {
@@ -102,7 +102,7 @@ func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
 	return result
 }
 
-func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Msg, clientIP string) []dns.RR {
+func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Msg, clientIP string) *dns.Msg {
 	if len(publicServers) == 0 && len(privateServers) == 0 {
 		logutil.Logger.Warn("No upstream DNS servers available")
 		return nil
@@ -127,7 +127,7 @@ func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Ms
 	return nil
 }
 
-func exchangeWithServerAndClientIP(m *dns.Msg, svr string, clientIP string) ([]dns.RR, error) {
+func exchangeWithServerAndClientIP(m *dns.Msg, svr string, clientIP string) (*dns.Msg, error) {
 	// Create a copy of the message for this specific server
 	query := m.Copy()
 
@@ -149,7 +149,7 @@ func exchangeWithServerAndClientIP(m *dns.Msg, svr string, clientIP string) ([]d
 		if config.EnableMetrics {
 			metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
 		}
-		return response.Answer, nil
+		return response, nil
 	}
 	logutil.Logger.Warnf("Exchange error using server %s: %v", svr, err)
 	if config.EnableMetrics {

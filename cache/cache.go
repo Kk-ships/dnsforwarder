@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -34,8 +35,8 @@ var (
 // CacheEntry represents a cache entry for persistence
 type CacheEntry struct {
 	Key        string    `json:"key"`
-	Answers    []string  `json:"answers"`    // DNS RR serialized as strings
-	Expiration time.Time `json:"expiration"` // Zero time means no expiration
+	AnswersB64 string    `json:"answers_b64"` // DNS message packed and base64-encoded
+	Expiration time.Time `json:"expiration"`  // Zero time means no expiration
 }
 
 // CacheSnapshot represents the entire cache state for persistence
@@ -74,23 +75,23 @@ func CacheKey(domain string, qtype uint16) string {
 	return b.String()
 }
 
-func SaveToCache(key string, answers []dns.RR, ttl time.Duration) {
+func SaveToCache(key string, answers *dns.Msg, ttl time.Duration) {
 	DnsCache.Set(key, answers, ttl)
 }
 
-func LoadFromCache(key string) ([]dns.RR, bool) {
+func LoadFromCache(key string) (*dns.Msg, bool) {
 	val, found := DnsCache.Get(key)
 	if !found {
 		return nil, false
 	}
-	answers, ok := val.([]dns.RR)
+	answers, ok := val.(*dns.Msg)
 	if !ok {
 		return nil, false
 	}
 	return answers, true
 }
 
-func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
+func ResolverWithCache(domain string, qtype uint16, clientIP string) *dns.Msg {
 	start := time.Now()
 	key := CacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
@@ -106,8 +107,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	if EnableMetrics {
 		metric.MetricsRecorderInstance.RecordCacheMiss()
 	}
-	var answers []dns.RR
-	var resolver func(string, uint16, string) []dns.RR
+	var answers *dns.Msg
+	var resolver func(string, uint16, string) *dns.Msg
 	resolver = dnsresolver.ResolverForClient
 	if EnableDomainRouting {
 		if _, ok := domainrouting.RoutingTable[domain]; ok {
@@ -116,7 +117,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	}
 	answers = resolver(domain, qtype, clientIP)
 	status := "success"
-	if len(answers) == 0 {
+	if answers == nil || len(answers.Answer) == 0 {
 		status = "nxdomain"
 		go SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
 		if EnableMetrics {
@@ -128,8 +129,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	minTTL := uint32(^uint32(0))
 	useDefaultTTL := false
 
-	for i := range answers {
-		rr := answers[i]
+	for i := range answers.Answer {
+		rr := answers.Answer[i]
 		ttl := rr.Header().Ttl
 		if ttl < minTTL {
 			minTTL = ttl
@@ -252,16 +253,20 @@ func SaveCacheToFile() error {
 			continue // Skip expired items
 		}
 
-		answers, ok := item.Object.([]dns.RR)
+		msg, ok := item.Object.(*dns.Msg)
 		if !ok {
 			logutil.Logger.Warnf("Failed to cast cache item for key %s", key)
 			continue
 		}
 
-		// Serialize DNS RRs to strings
-		answerStrings := make([]string, len(answers))
-		for i, rr := range answers {
-			answerStrings[i] = rr.String()
+		packed, err := msg.Pack()
+		if err != nil {
+			logutil.Logger.Warnf("Failed to pack DNS message for key %s: %v", key, err)
+			continue
+		}
+		b64 := ""
+		if len(packed) > 0 {
+			b64 = base64.StdEncoding.EncodeToString(packed)
 		}
 
 		var expiration time.Time
@@ -272,7 +277,7 @@ func SaveCacheToFile() error {
 
 		entries = append(entries, CacheEntry{
 			Key:        key,
-			Answers:    answerStrings,
+			AnswersB64: b64,
 			Expiration: expiration,
 		})
 	}
@@ -346,18 +351,17 @@ func LoadCacheFromFile() error {
 			continue
 		}
 
-		// Parse DNS RRs from strings
-		answers := make([]dns.RR, 0, len(entry.Answers))
-		for _, answerStr := range entry.Answers {
-			rr, err := dns.NewRR(answerStr)
+		if entry.AnswersB64 != "" {
+			packed, err := base64.StdEncoding.DecodeString(entry.AnswersB64)
 			if err != nil {
-				logutil.Logger.Warnf("Failed to parse DNS RR '%s': %v", answerStr, err)
+				logutil.Logger.Warnf("Failed to decode base64 DNS message for key %s: %v", entry.Key, err)
 				continue
 			}
-			answers = append(answers, rr)
-		}
-
-		if len(answers) > 0 {
+			msg := &dns.Msg{}
+			if err := msg.Unpack(packed); err != nil {
+				logutil.Logger.Warnf("Failed to unpack DNS message for key %s: %v", entry.Key, err)
+				continue
+			}
 			// Calculate remaining TTL
 			var ttl time.Duration
 			if entry.Expiration.IsZero() {
@@ -369,8 +373,7 @@ func LoadCacheFromFile() error {
 					continue // Skip if already expired
 				}
 			}
-
-			DnsCache.Set(entry.Key, answers, ttl)
+			DnsCache.Set(entry.Key, msg, ttl)
 			loadedCount++
 		}
 	}

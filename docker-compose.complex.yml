@@ -18,7 +18,7 @@ services:
     # Comment out the next line if not using interface binding features
     user: root
     # Network configuration for interface binding
-    network_mode: "host" # Required for interface binding to work properly
+    network_mode: "host" # Required for interface binding to work properly, also required for eDNS
     # Alternative: Use specific network if you don't want host networking
     # networks:
     #   - dns_network
