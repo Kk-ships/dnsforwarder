@@ -29,6 +29,23 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	logutil.Logger.Debug("ServeDNS: start")
 	msg := new(dns.Msg)
 	msg.SetReply(r)
+	if h.ednsManager.Enabled {
+		// Add Extra EDNS options if they exist
+		for _, extra := range r.Extra {
+			if o, ok := extra.(*dns.OPT); ok {
+				newOpt := &dns.OPT{
+					Hdr: dns.RR_Header{
+						Name:   ".",
+						Rrtype: dns.TypeOPT,
+					},
+					Option: o.Option,
+				}
+				newOpt.SetUDPSize(o.UDPSize())
+				newOpt.SetDo() // Make sure DO bit is set
+				msg.Extra = append(msg.Extra, newOpt)
+			}
+		}
+	}
 	msg.Authoritative = false     // We're a forwarder, not authoritative
 	msg.RecursionAvailable = true // We provide recursion
 
