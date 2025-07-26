@@ -130,22 +130,18 @@ func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Ms
 func exchangeWithServerAndClientIP(m *dns.Msg, svr string, clientIP string) (*dns.Msg, error) {
 	// Create a copy of the message for this specific server
 	query := m.Copy()
-
 	// Add EDNS Client Subnet only if this server supports it
 	if ednsManager.ShouldAddClientSubnet(svr) && clientIP != "" {
 		logutil.Logger.Debugf("Adding EDNS Client Subnet for server %s, clientIP %s", svr, clientIP)
 		ednsManager.AddClientSubnet(query, clientIP)
 	}
-
 	response, rtt, err := dnsClient.Exchange(query, svr)
 	if err == nil && response != nil {
 		statsMutex.Lock()
 		dnsUsageStats[svr]++
 		statsMutex.Unlock()
-
 		// Process EDNS Client Subnet response
 		ednsManager.ProcessClientSubnetResponse(response)
-
 		if config.EnableMetrics {
 			metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
 		}

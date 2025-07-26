@@ -67,8 +67,10 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if answers != nil {
 			msg.Answer = answers.Answer // Answer section
 			// Set authority and additional sections if available
-			msg.Ns = answers.Ns       // Authority section!
-			msg.Extra = answers.Extra // Additional section, where RRSIG often is
+			msg.Ns = answers.Ns // Authority section!
+			// Additional section, where RRSIG often is
+			// Keep your original EDNS OPT from request, then append any extra from upstream
+			msg.Extra = append(msg.Extra, answers.Extra...)
 			logutil.Logger.Debugf("ServeDNS: got %d answers for %s", len(answers.Answer), q.Name)
 		} else {
 			logutil.Logger.Warnf("ServeDNS: no answers found for %s (qtype=%d)", q.Name, q.Qtype)

@@ -13,7 +13,7 @@ import (
 
 const (
 	// EDNS Client Subnet option code
-	EDNS0SUBNET = 8
+	EDNS0SUBNET = dns.EDNS0SUBNET
 )
 
 // ClientSubnetManager handles EDNS Client Subnet functionality
@@ -56,7 +56,6 @@ func (csm *ClientSubnetManager) AddClientSubnet(msg *dns.Msg, clientIP string) {
 		return
 	}
 
-	// Check if EDNS Client Subnet option already exists
 	// Check if EDNS Client Subnet option already exists
 	for i := range edns.Option {
 		if edns.Option[i].Option() == EDNS0SUBNET {
