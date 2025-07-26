@@ -67,39 +67,35 @@ func UpdateDNSServersCache() {
 func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
 	m := dnsMsgPool.Get().(*dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), qtype)
-	m.RecursionDesired = true
-
+	m.Authoritative = false     // We're a forwarder, not authoritative
+	m.RecursionAvailable = true // We provide recursion
+	m.RecursionDesired = true   // Client expects recursion
 	// Set EDNS0 with appropriate buffer size
 	if ednsManager.Enabled {
 		m.SetEdns0(ednsManager.GetEDNSSize(), false)
 	}
-
 	return m
 }
 
-func prepareDNSQueryWithClientIP(domain string, qtype uint16, _ string) *dns.Msg {
-	m := prepareDNSQuery(domain, qtype)
+func prepareDNSQueryWithClientIP(msg *dns.Msg, _ string) *dns.Msg {
 	// Note: EDNS Client Subnet is added per-server in exchangeWithServer
-	return m
+	return prepareDNSQuery(msg.Question[0].Name, msg.Question[0].Qtype)
 }
 
-func ResolverForClient(domain string, qtype uint16, clientIP string) *dns.Msg {
-	m := prepareDNSQueryWithClientIP(domain, qtype, clientIP)
-	defer dnsMsgPool.Put(m)
+func ResolverForClient(m *dns.Msg, clientIP string) *dns.Msg {
+	msg := prepareDNSQueryWithClientIP(m, clientIP)
+	defer dnsMsgPool.Put(msg)
 	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
-	result := upstreamDNSQuery(privateServers, publicServers, m, clientIP)
-	return result
+	return upstreamDNSQuery(privateServers, publicServers, msg, clientIP)
 }
 
-func ResolverForDomain(domain string, qtype uint16, clientIP string) *dns.Msg {
-	m := prepareDNSQueryWithClientIP(domain, qtype, clientIP)
-	defer dnsMsgPool.Put(m)
-	if svr, ok := domainrouting.RoutingTable[domain]; ok {
-		result := upstreamDNSQuery([]string{svr}, []string{}, m, clientIP)
-		return result
+func ResolverForDomain(m *dns.Msg, clientIP string) *dns.Msg {
+	msg := prepareDNSQueryWithClientIP(m, clientIP)
+	defer dnsMsgPool.Put(msg)
+	if svr, ok := domainrouting.RoutingTable[msg.Question[0].Name]; ok {
+		return upstreamDNSQuery([]string{svr}, []string{}, msg, clientIP)
 	}
-	result := ResolverForClient(domain, qtype, clientIP)
-	return result
+	return ResolverForClient(msg, clientIP)
 }
 
 func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Msg, clientIP string) *dns.Msg {

@@ -91,8 +91,9 @@ func LoadFromCache(key string) (*dns.Msg, bool) {
 	return answers, true
 }
 
-func ResolverWithCache(domain string, qtype uint16, clientIP string) *dns.Msg {
+func ResolverWithCache(msg *dns.Msg, clientIP string) *dns.Msg {
 	start := time.Now()
+	domain, qtype := msg.Question[0].Name, msg.Question[0].Qtype
 	key := CacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
 	qTypeStr := dns.TypeToString[qtype]
@@ -104,18 +105,19 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) *dns.Msg {
 		}
 		return answers
 	}
+	// answers not found in cache, proceed with resolution with upstream
 	if EnableMetrics {
 		metric.MetricsRecorderInstance.RecordCacheMiss()
 	}
 	var answers *dns.Msg
-	var resolver func(string, uint16, string) *dns.Msg
+	var resolver func(*dns.Msg, string) *dns.Msg
 	resolver = dnsresolver.ResolverForClient
 	if EnableDomainRouting {
 		if _, ok := domainrouting.RoutingTable[domain]; ok {
 			resolver = dnsresolver.ResolverForDomain
 		}
 	}
-	answers = resolver(domain, qtype, clientIP)
+	answers = resolver(msg, clientIP)
 	status := "success"
 	if answers == nil || len(answers.Answer) == 0 {
 		status = "nxdomain"

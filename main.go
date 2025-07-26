@@ -13,6 +13,8 @@ import (
 	"dnsloadbalancer/network"
 	"dnsloadbalancer/pidfile"
 	"dnsloadbalancer/util"
+	"net"
+
 	"os"
 	"os/signal"
 	"syscall"
@@ -27,63 +29,63 @@ type dnsHandler struct {
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	logutil.Logger.Debug("ServeDNS: start")
+	defer logutil.Logger.Debug("ServeDNS: end")
+
 	msg := new(dns.Msg)
 	msg.SetReply(r)
+	if len(r.Question) == 0 {
+		logutil.Logger.Warn("ServeDNS: no question in request")
+		return
+	}
+
+	q := r.Question[0]
+	clientIP := util.GetClientIP(w)
+
+	// Extract real client IP for EDNS Client Subnet
 	if h.ednsManager.Enabled {
-		// Add Extra EDNS options if they exist
-		for _, extra := range r.Extra {
-			if o, ok := extra.(*dns.OPT); ok {
-				newOpt := &dns.OPT{
-					Hdr: dns.RR_Header{
-						Name:   ".",
-						Rrtype: dns.TypeOPT,
-					},
-					Option: o.Option,
+		if realClientIP := h.ednsManager.ExtractClientIP(w); realClientIP != "" {
+			clientIP = realClientIP
+		}
+		if !util.IsPrivateIP(net.ParseIP(clientIP)) {
+			logutil.Logger.Info("ServeDNS: using real client IP for EDNS Client Subnet:", clientIP)
+			for _, extra := range r.Extra {
+				if o, ok := extra.(*dns.OPT); ok {
+					newOpt := &dns.OPT{
+						Hdr: dns.RR_Header{
+							Name:   ".",
+							Rrtype: dns.TypeOPT,
+						},
+						Option: o.Option,
+					}
+					newOpt.SetUDPSize(o.UDPSize())
+					msg.Extra = append(msg.Extra, newOpt)
 				}
-				newOpt.SetUDPSize(o.UDPSize())
-				msg.Extra = append(msg.Extra, newOpt)
 			}
 		}
 	}
-	msg.Authoritative = false     // We're a forwarder, not authoritative
-	msg.RecursionAvailable = true // We provide recursion
 
-	if len(r.Question) > 0 {
-		q := r.Question[0]
-		clientIP := util.GetClientIP(w)
+	logutil.Logger.Debugf("ServeDNS: clientIP=%s, q.Name=%s, q.Qtype=%d", clientIP, q.Name, q.Qtype)
+	answers := cache.ResolverWithCache(msg, clientIP)
 
-		// Extract real client IP for EDNS Client Subnet
-		if h.ednsManager.Enabled {
-			realClientIP := h.ednsManager.ExtractClientIP(w)
-			if realClientIP != "" {
-				clientIP = realClientIP
-			}
-		}
-
-		logutil.Logger.Debugf("ServeDNS: clientIP=%s, q.Name=%s, q.Qtype=%d", clientIP, q.Name, q.Qtype)
-		answers := cache.ResolverWithCache(
-			q.Name, q.Qtype, clientIP,
-		)
-		if answers != nil {
-			msg.Answer = answers.Answer // Answer section
-			// Set authority and additional sections if available
-			msg.Ns = answers.Ns // Authority section!
-			// Additional section, where RRSIG often is
-			// Keep your original EDNS OPT from request, then append any extra from upstream
-			msg.Extra = append(msg.Extra, answers.Extra...)
-			logutil.Logger.Debugf("ServeDNS: got %d answers for %s", len(answers.Answer), q.Name)
-		} else {
-			logutil.Logger.Warnf("ServeDNS: no answers found for %s (qtype=%d)", q.Name, q.Qtype)
-		}
+	if answers == nil {
+		logutil.Logger.Warnf("ServeDNS: no answers found for %s (qtype=%d)", q.Name, q.Qtype)
+	} else {
+		msg.Answer = answers.Answer
+		msg.Ns = answers.Ns
+		msg.Extra = append(msg.Extra, answers.Extra...)
+		logutil.Logger.Debugf("ServeDNS: got %d answers for %s", len(answers.Answer), q.Name)
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-		if config.EnableMetrics {
-			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
-		}
-		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
+		logError(err, "dns_response_write_failed", "dns_handler")
 	}
-	logutil.Logger.Debug("ServeDNS: end")
+}
+
+func logError(err error, metricKey, source string) {
+	if config.EnableMetrics {
+		metricsRecorder.RecordError(metricKey, source)
+	}
+	logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 }
 
 // --- Server Startup ---

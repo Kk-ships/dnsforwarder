@@ -7,6 +7,7 @@ import (
 
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/logutil"
+	"dnsloadbalancer/util"
 
 	"github.com/miekg/dns"
 )
@@ -165,7 +166,7 @@ func (csm *ClientSubnetManager) ShouldAddClientSubnet(upstreamServer string) boo
 	// For servers not in the explicit list, check if they're private
 	ip := net.ParseIP(serverIP)
 	if ip != nil {
-		isPrivate := isPrivateIP(ip)
+		isPrivate := util.IsPrivateIP(ip)
 		logutil.Logger.Debugf("Server %s: IP=%s, isPrivate=%v, will add EDNS Client Subnet=%v", upstreamServer, serverIP, isPrivate, !isPrivate)
 		// Only add EDNS Client Subnet to public (non-private) IP addresses
 		// that are not explicitly in our supported list
@@ -173,27 +174,6 @@ func (csm *ClientSubnetManager) ShouldAddClientSubnet(upstreamServer string) boo
 	}
 
 	logutil.Logger.Debugf("Could not parse IP for server %s, skipping EDNS Client Subnet", upstreamServer)
-	return false
-}
-
-// isPrivateIP checks if an IP address is private/internal
-func isPrivateIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return true
-	}
-
-	// Check for private IPv4 ranges
-	if ip.To4() != nil {
-		// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-		return ip.IsPrivate()
-	}
-
-	// Check for private IPv6 ranges
-	// Unique local addresses (fc00::/7)
-	if len(ip) == 16 && (ip[0]&0xfe) == 0xfc {
-		return true
-	}
-
 	return false
 }
 

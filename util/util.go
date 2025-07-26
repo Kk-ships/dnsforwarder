@@ -164,3 +164,24 @@ func GetClientIP(w dns.ResponseWriter) string {
 		return s
 	}
 }
+
+// IsPrivateIP checks if an IP address is private/internal
+func IsPrivateIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+
+	// Check for private IPv4 ranges
+	if ip.To4() != nil {
+		// 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+		return ip.IsPrivate()
+	}
+
+	// Check for private IPv6 ranges
+	// Unique local addresses (fc00::/7)
+	if len(ip) == 16 && (ip[0]&0xfe) == 0xfc {
+		return true
+	}
+
+	return false
+}
