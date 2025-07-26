@@ -145,26 +145,35 @@ func (csm *ClientSubnetManager) ExtractClientIP(w dns.ResponseWriter) string {
 // ShouldAddClientSubnet determines if we should add client subnet based on upstream server
 func (csm *ClientSubnetManager) ShouldAddClientSubnet(upstreamServer string) bool {
 	if !csm.Enabled {
+		logutil.Logger.Debugf("EDNS Client Subnet disabled, skipping for server %s", upstreamServer)
 		return false
 	}
 
-	// Check if the upstream server supports EDNS Client Subnet
-	// Common public DNS providers that support ECS:
+	// Extract server IP from address (remove port if present)
+	serverIP := strings.Split(upstreamServer, ":")[0]
+
+	// Check if the upstream server is explicitly in the supported servers list
 	supportedProviders := config.EDNSupportedServers
 	if len(supportedProviders) == 0 {
 		supportedProviders = config.EDNS_SUPPORTED_SERVERS // Fallback to default list
 	}
-	serverIP := strings.Split(upstreamServer, ":")[0]
+
 	if slices.Contains(supportedProviders, serverIP) {
+		logutil.Logger.Debugf("Server %s is in supported providers list, enabling EDNS Client Subnet", upstreamServer)
 		return true
 	}
 
-	// For other servers, check if they're public (not private/internal)
+	// For servers not in the explicit list, check if they're private
 	ip := net.ParseIP(serverIP)
 	if ip != nil {
-		return !isPrivateIP(ip)
+		isPrivate := isPrivateIP(ip)
+		logutil.Logger.Debugf("Server %s: IP=%s, isPrivate=%v, will add EDNS Client Subnet=%v", upstreamServer, serverIP, isPrivate, !isPrivate)
+		// Only add EDNS Client Subnet to public (non-private) IP addresses
+		// that are not explicitly in our supported list
+		return !isPrivate
 	}
 
+	logutil.Logger.Debugf("Could not parse IP for server %s, skipping EDNS Client Subnet", upstreamServer)
 	return false
 }
 
