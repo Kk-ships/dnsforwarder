@@ -2,6 +2,7 @@ package edns
 
 import (
 	"net"
+	"slices"
 	"strings"
 
 	"dnsloadbalancer/config"
@@ -56,8 +57,9 @@ func (csm *ClientSubnetManager) AddClientSubnet(msg *dns.Msg, clientIP string) {
 	}
 
 	// Check if EDNS Client Subnet option already exists
-	for _, opt := range edns.Option {
-		if opt.Option() == EDNS0SUBNET {
+	// Check if EDNS Client Subnet option already exists
+	for i := range edns.Option {
+		if edns.Option[i].Option() == EDNS0SUBNET {
 			// Option already exists, skip adding
 			logutil.Logger.Debug("EDNS Client Subnet option already exists")
 			return
@@ -148,19 +150,13 @@ func (csm *ClientSubnetManager) ShouldAddClientSubnet(upstreamServer string) boo
 
 	// Check if the upstream server supports EDNS Client Subnet
 	// Common public DNS providers that support ECS:
-	supportedProviders := []string{
-		"1.1.1.1",        // Cloudflare
-		"8.8.8.8",        // Google
-		"8.8.4.4",        // Google
-		"208.67.222.222", // OpenDNS
-		"208.67.220.220", // OpenDNS
+	supportedProviders := config.EDNSupportedServers
+	if len(supportedProviders) == 0 {
+		supportedProviders = config.EDNS_SUPPORTED_SERVERS // Fallback to default list
 	}
-
 	serverIP := strings.Split(upstreamServer, ":")[0]
-	for _, provider := range supportedProviders {
-		if serverIP == provider {
-			return true
-		}
+	if slices.Contains(supportedProviders, serverIP) {
+		return true
 	}
 
 	// For other servers, check if they're public (not private/internal)

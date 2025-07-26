@@ -2,6 +2,7 @@ package config
 
 import (
 	"dnsloadbalancer/util"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,14 @@ const MinCacheTTL = 30 * time.Second
 const MaxCacheTTL = 24 * time.Hour
 
 const DefaultPublicDNS = "1.1.1.1:53"
+
+var EDNS_SUPPORTED_SERVERS = []string{
+	"1.1.1.1",        // Cloudflare
+	"8.8.8.8",        // Google
+	"8.8.4.4",        // Google
+	"208.67.222.222", // OpenDNS
+	"208.67.220.220", // OpenDNS
+}
 
 var (
 	PrivateServers      = util.GetEnvStringSlice("PRIVATE_DNS_SERVERS", "")
@@ -63,4 +72,5 @@ var (
 	EnableEDNSClientSubnet = util.GetEnvBool("ENABLE_EDNS_CLIENT_SUBNET", false)
 	EDNSClientSubnetScope  = util.GetEnvInt("EDNS_CLIENT_SUBNET_SCOPE", 24) // Default subnet scope for IPv4
 	ForwardClientIP        = util.GetEnvBool("FORWARD_CLIENT_IP", true)     // Whether to forward real client IP in EDNS
+	EDNSupportedServers    = util.GetEnvStringSlice("EDNS_SUPPORTED_SERVERS", strings.Join(EDNS_SUPPORTED_SERVERS, ","))
 )

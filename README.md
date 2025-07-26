@@ -162,6 +162,7 @@ PID_FILE_PATH=/var/run/dnsforwarder.pid
 ENABLE_EDNS_CLIENT_SUBNET=true
 EDNS_CLIENT_SUBNET_SCOPE=24
 FORWARD_CLIENT_IP=true
+EDNS_SUPPORTED_SERVERS=1.1.1.1,8.8.8.8,8.8.4.4,208.67.222.222,208.67.220.220
 
 # Cache Persistence Configuration (Optional)
 ENABLE_CACHE_PERSISTENCE=true
@@ -223,6 +224,7 @@ LOG_LEVEL=info
 - **ENABLE_EDNS_CLIENT_SUBNET:** Enable EDNS Client Subnet support for forwarding client IP information (default `false`).
 - **EDNS_CLIENT_SUBNET_SCOPE:** Subnet scope for IPv4 addresses in CIDR notation (default `24`).
 - **FORWARD_CLIENT_IP:** Whether to forward client IP addresses in EDNS queries (default `true`).
+- **EDNS_SUPPORTED_SERVERS:** Comma-separated list of DNS servers that support EDNS Client Subnet (default `1.1.1.1,8.8.8.8,8.8.4.4,208.67.222.222,208.67.220.220`).
 
 ### 5. Client-Based DNS Routing
 
