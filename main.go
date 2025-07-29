@@ -22,6 +22,7 @@ type dnsHandler struct{}
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	logutil.Logger.Debug("ServeDNS: start")
+	defer logutil.Logger.Debug("ServeDNS: end")
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
@@ -45,12 +46,12 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 	}
-	logutil.Logger.Debug("ServeDNS: end")
 }
 
 // --- Server Startup ---
 func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: start")
+	defer logutil.Logger.Debug("StartDNSServer: end")
 	// --- Initialization ---
 	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, metricsRecorder, config.EnableClientRouting, config.EnableDomainRouting)
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
@@ -113,7 +114,6 @@ func StartDNSServer() {
 			logutil.Logger.Fatalf("Failed to start server: %s\n", err.Error())
 		}
 	}
-	logutil.Logger.Debug("StartDNSServer: end")
 }
 
 func main() {

@@ -6,11 +6,18 @@ import (
 	"dnsloadbalancer/util"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/patrickmn/go-cache"
 )
 
 var (
 	PublicOnlyClientsMap    sync.Map // map[string]bool for fast lookup (IP)
 	PublicOnlyClientMACsMap sync.Map // map[string]bool for fast lookup (MAC)
+
+	// MAC address cache using go-cache
+	macCache    *cache.Cache
+	macCacheTTL = 5 * time.Minute // Cache MAC addresses for 5 minutes
 )
 
 func InitializeClientRouting() {
@@ -18,8 +25,13 @@ func InitializeClientRouting() {
 		return
 	}
 	logutil.Logger.Info("Client-based DNS routing enabled")
+
+	// Initialize MAC address cache
+	macCache = cache.New(macCacheTTL, 2*macCacheTTL)
+
 	storeClientsToMap(config.PublicOnlyClients, &PublicOnlyClientsMap, "IP")
 	storeMACsToMap(config.PublicOnlyClientMACs, &PublicOnlyClientMACsMap)
+
 	logutil.Logger.Debug("InitializeClientRouting: end")
 }
 
@@ -45,6 +57,31 @@ func storeMACsToMap(macs []string, m *sync.Map) {
 	logutil.Logger.Debug("storeMACsToMap: end")
 }
 
+// getMACWithCache retrieves MAC address for IP with caching
+func getMACWithCache(clientIP string) string {
+	// Check if we have a cached entry
+	if cachedMAC, found := macCache.Get(clientIP); found {
+		if mac, ok := cachedMAC.(string); ok {
+			logutil.Logger.Debugf("Using cached MAC for IP %s: %s", clientIP, mac)
+			return mac
+		}
+	}
+
+	// Cache miss - fetch MAC address
+	mac := util.GetMACFromARP(clientIP)
+
+	// Cache the result (even if empty) with TTL
+	macCache.Set(clientIP, mac, macCacheTTL)
+
+	if mac != "" {
+		logutil.Logger.Debugf("Cached MAC for IP %s: %s", clientIP, mac)
+	} else {
+		logutil.Logger.Debugf("No MAC found for IP %s, cached empty result", clientIP)
+	}
+
+	return mac
+}
+
 func ShouldUsePublicServers(clientIP string) bool {
 	if !config.EnableClientRouting {
 		return false
@@ -53,7 +90,7 @@ func ShouldUsePublicServers(clientIP string) bool {
 	if _, exists := PublicOnlyClientsMap.Load(clientIP); exists {
 		return true
 	}
-	mac := util.GetMACFromARP(clientIP)
+	mac := getMACWithCache(clientIP)
 	if mac != "" {
 		_, exists := PublicOnlyClientMACsMap.Load(mac)
 		return exists
