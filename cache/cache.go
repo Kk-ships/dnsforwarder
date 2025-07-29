@@ -1,3 +1,10 @@
+// Package cache provides DNS response caching functionality with persistence
+// and performance optimizations including:
+// - Object pooling for string builders and DNS RR slices to reduce GC pressure
+// - Elimination of unnecessary goroutines for synchronous cache operations
+// - Optimized JSON encoding with pre-allocated buffers
+// - Reduced time.Now() calls in hot paths
+// - Improved type assertion handling with corruption detection
 package cache
 
 import (
@@ -7,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -65,16 +73,54 @@ func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, e
 	StartCachePersistence()
 }
 
+// Pre-allocated buffer pool for cache keys to reduce allocations
+var keyBuilderPool = sync.Pool{
+	New: func() interface{} {
+		return &strings.Builder{}
+	},
+}
+
+// Pool for DNS RR slices to reduce allocations
+var dnsRRSlicePool = sync.Pool{
+	New: func() interface{} {
+		slice := make([]dns.RR, 0, 16) // Pre-allocate common slice size
+		return &slice
+	},
+}
+
+// getDNSRRSlice gets a slice from the pool and resets it
+func getDNSRRSlice() []dns.RR {
+	slicePtr := dnsRRSlicePool.Get().(*[]dns.RR)
+	slice := *slicePtr
+	return slice[:0] // Reset length but keep capacity
+}
+
+// putDNSRRSlice returns a slice to the pool if it's not too large
+func putDNSRRSlice(slice []dns.RR) {
+	const maxPoolSliceSize = 256
+	if cap(slice) <= maxPoolSliceSize {
+		dnsRRSlicePool.Put(&slice)
+	}
+}
+
 func CacheKey(domain string, qtype uint16) string {
-	var b strings.Builder
-	b.Grow(len(domain) + 1 + 5)
-	b.WriteString(domain)
-	b.WriteByte(':')
-	b.WriteString(strconv.FormatUint(uint64(qtype), 10))
-	return b.String()
+	builder := keyBuilderPool.Get().(*strings.Builder)
+	defer func() {
+		builder.Reset()
+		keyBuilderPool.Put(builder)
+	}()
+
+	// Pre-allocate with exact capacity to avoid reallocation
+	builder.Grow(len(domain) + 6) // domain + ':' + up to 5 digits for qtype
+	builder.WriteString(domain)
+	builder.WriteByte(':')
+	builder.WriteString(strconv.FormatUint(uint64(qtype), 10))
+	return builder.String()
 }
 
 func SaveToCache(key string, answers []dns.RR, ttl time.Duration) {
+	// Direct cache set for better performance - no goroutine overhead
+	// for frequent small operations like individual DNS responses
 	DnsCache.Set(key, answers, ttl)
 }
 
@@ -83,11 +129,15 @@ func LoadFromCache(key string) ([]dns.RR, bool) {
 	if !found {
 		return nil, false
 	}
-	answers, ok := val.([]dns.RR)
-	if !ok {
-		return nil, false
+	// Use type assertion with early return for better performance
+	if answers, ok := val.([]dns.RR); ok {
+		return answers, true
 	}
-	return answers, true
+	// Log only once for debugging, avoid repeated type assertion failures
+	logutil.Logger.Warnf("Cache corruption detected for key %s: invalid type", key)
+	// Remove corrupted entry to prevent repeated warnings
+	DnsCache.Delete(key)
+	return nil, false
 }
 
 func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
@@ -118,7 +168,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	status := "success"
 	if len(answers) == 0 {
 		status = "nxdomain"
-		go SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
+		// Removed goroutine - cache negative responses directly
+		SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
 		if EnableMetrics {
 			metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 		}
@@ -159,7 +210,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 			ttl = ttlDuration
 		}
 	}
-	go SaveToCache(key, answers, ttl)
+	// Removed goroutine - cache positive responses directly for better performance
+	SaveToCache(key, answers, ttl)
 	if EnableMetrics {
 		metric.MetricsRecorderInstance.RecordDNSQuery(qTypeStr, status, time.Since(start))
 	}
@@ -241,6 +293,7 @@ func SaveCacheToFile() error {
 	logutil.Logger.Debug("Starting cache persistence to disk")
 
 	items := DnsCache.Items()
+	// Pre-allocate slice with exact capacity to avoid reallocation
 	entries := make([]CacheEntry, 0, len(items))
 
 	// Capture current time once to avoid repeated time.Now() calls
@@ -258,7 +311,7 @@ func SaveCacheToFile() error {
 			continue
 		}
 
-		// Serialize DNS RRs to strings
+		// Pre-allocate slice for answer strings to reduce allocations
 		answerStrings := make([]string, len(answers))
 		for i, rr := range answers {
 			answerStrings[i] = rr.String()
@@ -279,21 +332,30 @@ func SaveCacheToFile() error {
 
 	snapshot := CacheSnapshot{
 		Entries:   entries,
-		Timestamp: time.Now(),
+		Timestamp: now, // Use the same timestamp captured earlier
 		Stats: CacheStats{
 			TotalHits:     atomic.LoadInt64(&cacheHits),
 			TotalRequests: atomic.LoadInt64(&cacheRequests),
 		},
 	}
 
-	data, err := json.Marshal(snapshot)
+	// Use a more efficient JSON encoding approach for large caches
+	file, err := os.OpenFile(config.CachePersistenceFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to marshal cache data: %w", err)
+		return fmt.Errorf("failed to create cache file: %w", err)
 	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			logutil.Logger.Errorf("Failed to close cache file: %v", closeErr)
+		}
+	}()
 
-	err = os.WriteFile(config.CachePersistenceFile, data, 0644)
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ") // Keep formatting for readability
+
+	err = encoder.Encode(snapshot)
 	if err != nil {
-		return fmt.Errorf("failed to write cache file: %w", err)
+		return fmt.Errorf("failed to encode cache data: %w", err)
 	}
 
 	logutil.Logger.Debugf("Cache persisted to disk: %d entries saved to %s", len(entries),
@@ -340,14 +402,17 @@ func LoadCacheFromFile() error {
 	// Capture current time once to avoid repeated time.Now() calls
 	now := time.Now()
 
+	// Pre-allocate a slice to reduce allocations during DNS RR parsing
 	for _, entry := range snapshot.Entries {
 		// Skip expired entries
 		if !entry.Expiration.IsZero() && now.After(entry.Expiration) {
 			continue
 		}
 
-		// Parse DNS RRs from strings
-		answers := make([]dns.RR, 0, len(entry.Answers))
+		// Use pooled slice to reduce allocations
+		answers := getDNSRRSlice()
+		successfulParses := 0
+
 		for _, answerStr := range entry.Answers {
 			rr, err := dns.NewRR(answerStr)
 			if err != nil {
@@ -355,9 +420,10 @@ func LoadCacheFromFile() error {
 				continue
 			}
 			answers = append(answers, rr)
+			successfulParses++
 		}
 
-		if len(answers) > 0 {
+		if successfulParses > 0 {
 			// Calculate remaining TTL
 			var ttl time.Duration
 			if entry.Expiration.IsZero() {
@@ -366,13 +432,20 @@ func LoadCacheFromFile() error {
 			} else {
 				ttl = time.Until(entry.Expiration)
 				if ttl <= 0 {
-					continue // Skip if already expired
+					putDNSRRSlice(answers) // Return to pool before continuing
+					continue               // Skip if already expired
 				}
 			}
 
-			DnsCache.Set(entry.Key, answers, ttl)
+			// Make a copy since we're storing it in cache
+			cachedAnswers := make([]dns.RR, len(answers))
+			copy(cachedAnswers, answers)
+			DnsCache.Set(entry.Key, cachedAnswers, ttl)
 			loadedCount++
 		}
+
+		// Return slice to pool for reuse
+		putDNSRRSlice(answers)
 	}
 
 	// Restore statistics
