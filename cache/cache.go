@@ -161,7 +161,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	var resolver func(string, uint16, string) []dns.RR
 	resolver = dnsresolver.ResolverForClient
 	if EnableDomainRouting {
-		if _, ok := domainrouting.RoutingTable[domain]; ok {
+		if _, ok := domainrouting.GetRoutingTable()[domain]; ok {
 			resolver = dnsresolver.ResolverForDomain
 		}
 	}

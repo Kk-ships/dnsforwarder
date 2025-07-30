@@ -74,7 +74,7 @@ func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQuery(domain, qtype)
 	defer dnsMsgPool.Put(m)
-	if svr, ok := domainrouting.RoutingTable[domain]; ok {
+	if svr, ok := domainrouting.GetRoutingTable()[domain]; ok {
 		result := upstreamDNSQuery([]string{svr}, []string{}, m)
 		return result
 	}
