@@ -5,7 +5,7 @@ import (
 	"dnsloadbalancer/util"
 	"net/http"
 	"runtime"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -104,11 +104,22 @@ var (
 
 var (
 	metricsUpdateInterval time.Duration
-	totalQueries          int64
-	totalCacheHits        int64
-	totalCacheMisses      int64
-	totalUpstreamQueries  int64
-	totalErrors           int64
+	// Removed redundant atomic counters - Prometheus metrics already track these
+	// Pre-allocated runtime.MemStats to reduce GC pressure
+	memStatsPool = sync.Pool{
+		New: func() interface{} {
+			return &runtime.MemStats{}
+		},
+	}
+	// Pre-allocated HTTP response strings to avoid allocations
+	healthResponse = []byte("OK")
+	statusResponse = []byte(`{"status":"running","service":"dns-forwarder"}`)
+	// Cache for expensive system metrics to reduce runtime calls
+	lastSystemMetricsUpdate    time.Time
+	systemMetricsCacheDuration = 5 * time.Second // Cache system metrics for 5 seconds
+	cachedGoroutines           int
+	cachedMemoryUsage          uint64
+	systemMetricsMutex         sync.RWMutex
 )
 
 func init() {
@@ -139,23 +150,19 @@ func NewMetricsRecorder() *MetricsRecorder {
 func (m *MetricsRecorder) RecordDNSQuery(queryType, status string, duration time.Duration) {
 	dnsQueriesTotal.WithLabelValues(queryType, status).Inc()
 	dnsQueryDuration.WithLabelValues(queryType, status).Observe(duration.Seconds())
-	atomic.AddInt64(&totalQueries, 1)
 }
 
 func (m *MetricsRecorder) RecordCacheHit() {
 	cacheHitsTotal.Inc()
-	atomic.AddInt64(&totalCacheHits, 1)
 }
 
 func (m *MetricsRecorder) RecordCacheMiss() {
 	cacheMissesTotal.Inc()
-	atomic.AddInt64(&totalCacheMisses, 1)
 }
 
 func (m *MetricsRecorder) RecordUpstreamQuery(server, status string, duration time.Duration) {
 	upstreamQueriesTotal.WithLabelValues(server, status).Inc()
 	upstreamQueryDuration.WithLabelValues(server, status).Observe(duration.Seconds())
-	atomic.AddInt64(&totalUpstreamQueries, 1)
 }
 
 func (m *MetricsRecorder) SetUpstreamServerReachable(server string, reachable bool) {
@@ -176,7 +183,6 @@ func (m *MetricsRecorder) UpdateCacheSize(size int) {
 
 func (m *MetricsRecorder) RecordError(errorType, source string) {
 	errorsTotal.WithLabelValues(errorType, source).Inc()
-	atomic.AddInt64(&totalErrors, 1)
 }
 
 var MetricsRecorderInstance = NewMetricsRecorder()
@@ -202,14 +208,14 @@ func StartMetricsServer() {
 	mux.Handle(metricsPath, promhttp.Handler())
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte("OK")); err != nil {
+		if _, err := w.Write(healthResponse); err != nil {
 			logutil.Logger.Errorf("Failed to write health check response: %v", err)
 		}
 	})
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status":"running","service":"dns-forwarder"}`)); err != nil {
+		if _, err := w.Write(statusResponse); err != nil {
 			logutil.Logger.Errorf("Failed to write status response: %v", err)
 		}
 	})
@@ -225,16 +231,58 @@ func StartMetricsServer() {
 	}()
 }
 
-// GetGoroutineCount returns the current number of goroutines
+// GetGoroutineCount returns the current number of goroutines with caching
 func GetGoroutineCount() int {
-	return runtime.NumGoroutine()
+	systemMetricsMutex.RLock()
+	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
+		count := cachedGoroutines
+		systemMetricsMutex.RUnlock()
+		return count
+	}
+	systemMetricsMutex.RUnlock()
+
+	systemMetricsMutex.Lock()
+	// Double-check after acquiring write lock
+	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
+		count := cachedGoroutines
+		systemMetricsMutex.Unlock()
+		return count
+	}
+
+	cachedGoroutines = runtime.NumGoroutine()
+	lastSystemMetricsUpdate = time.Now()
+	count := cachedGoroutines
+	systemMetricsMutex.Unlock()
+	return count
 }
 
-// GetMemoryUsage returns the current memory usage in bytes
+// GetMemoryUsage returns the current memory usage in bytes with caching and optimized allocation
 func GetMemoryUsage() uint64 {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	return m.Alloc
+	systemMetricsMutex.RLock()
+	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
+		usage := cachedMemoryUsage
+		systemMetricsMutex.RUnlock()
+		return usage
+	}
+	systemMetricsMutex.RUnlock()
+
+	systemMetricsMutex.Lock()
+	// Double-check after acquiring write lock
+	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
+		usage := cachedMemoryUsage
+		systemMetricsMutex.Unlock()
+		return usage
+	}
+
+	m := memStatsPool.Get().(*runtime.MemStats)
+	defer memStatsPool.Put(m)
+
+	runtime.ReadMemStats(m)
+	cachedMemoryUsage = m.Alloc
+	lastSystemMetricsUpdate = time.Now()
+	usage := cachedMemoryUsage
+	systemMetricsMutex.Unlock()
+	return usage
 }
 
 func updateSystemMetrics() {
