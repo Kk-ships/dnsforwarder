@@ -97,6 +97,13 @@ func GetEnvBool(key string, def bool) bool {
 	return val
 }
 
+// ClearEnvCaches clears all environment variable caches - for testing only
+func ClearEnvCaches() {
+	envDurationCache = sync.Map{}
+	envIntCache = sync.Map{}
+	envStringCache = sync.Map{}
+}
+
 // RunCommand runs a system command and returns its output as a string.
 func RunCommand(cmd string, args []string) (string, error) {
 	c := exec.Command(cmd, args...)

@@ -18,6 +18,8 @@ import (
 	"github.com/miekg/dns"
 )
 
+var cfg = config.Get()
+
 type dnsHandler struct{}
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
@@ -41,7 +43,8 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-		if config.EnableMetrics {
+
+		if cfg.EnableMetrics {
 			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
 		}
 		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
@@ -53,7 +56,7 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: start")
 	defer logutil.Logger.Debug("StartDNSServer: end")
 	// --- Initialization ---
-	cache.Init(config.DefaultDNSCacheTTL, config.EnableMetrics, metricsRecorder, config.EnableClientRouting, config.EnableDomainRouting)
+	cache.Init(cfg.CacheTTL, cfg.EnableMetrics, metricsRecorder, cfg.EnableClientRouting, cfg.EnableDomainRouting)
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
 	dnssource.InitDNSSource(metricsRecorder)
 	logutil.Logger.Debug("StartDNSServer: dns source initialized")
@@ -66,19 +69,19 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: client routing initialized")
 	// Start cache stats and metrics logging in background
 	cache.StartCacheStatsLogger()
-	if config.EnableMetrics {
+	if cfg.EnableMetrics {
 		go StartMetricsServer()
 		go StartMetricsUpdater()
-		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", config.DefaultMetricsPort)
+		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", cfg.MetricsPort)
 	}
 
 	// DNS server setup
 	handler := new(dnsHandler)
 	server := &dns.Server{
-		Addr:      config.DefaultDNSPort,
+		Addr:      cfg.DNSPort,
 		Net:       "udp",
 		Handler:   handler,
-		UDPSize:   config.DefaultUDPSize,
+		UDPSize:   cfg.UDPSize,
 		ReusePort: true,
 	}
 	logutil.Logger.Infof("Starting DNS server on port 53 (UDP)")

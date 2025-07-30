@@ -18,12 +18,14 @@ var (
 	metricsRecorder = metric.MetricsRecorderInstance
 	dnsUsageStats   = make(map[string]int)
 	statsMutex      sync.Mutex
-	cacheRefresh    = config.DefaultCacheRefresh
-	dnsClient       = &dns.Client{Timeout: config.DefaultDNSTimeout}
 	dnsMsgPool      = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
+	cfg             = config.Get()
 )
 
 func UpdateDNSServersCache() {
+	cacheRefresh := cfg.CacheRefresh
+	dnsClient := &dns.Client{Timeout: cfg.DNSTimeout}
+
 	ticker := time.NewTicker(cacheRefresh)
 	go func() {
 		defer ticker.Stop()
@@ -31,9 +33,9 @@ func UpdateDNSServersCache() {
 			dnssource.UpdateDNSServersCache(
 				metricsRecorder,
 				cacheRefresh,
-				config.EnableClientRouting,
-				config.PrivateServers,
-				config.PublicServers,
+				cfg.EnableClientRouting,
+				cfg.PrivateServers,
+				cfg.PublicServers,
 				dnsClient,
 				&dnsMsgPool,
 			)
@@ -93,18 +95,19 @@ func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Ms
 }
 
 func exchangeWithServer(m *dns.Msg, svr string) ([]dns.RR, error) {
+	dnsClient := &dns.Client{Timeout: cfg.DNSTimeout}
 	response, rtt, err := dnsClient.Exchange(m, svr)
 	if err == nil && response != nil {
 		statsMutex.Lock()
 		dnsUsageStats[svr]++
 		statsMutex.Unlock()
-		if config.EnableMetrics {
+		if cfg.EnableMetrics {
 			metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
 		}
 		return response.Answer, nil
 	}
 	logutil.Logger.Warnf("Exchange error using server %s: %v", svr, err)
-	if config.EnableMetrics {
+	if cfg.EnableMetrics {
 		metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
 		metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
 	}

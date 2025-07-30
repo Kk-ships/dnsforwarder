@@ -37,6 +37,7 @@ var (
 	EnableClientRouting bool
 	EnableDomainRouting bool
 	persistenceTicker   *time.Ticker
+	cfg                 = config.Get() // Global config instance
 )
 
 // CacheEntry represents a cache entry for persistence
@@ -220,12 +221,10 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 
 // ensureCacheDir ensures the cache persistence directory exists and is writable
 func ensureCacheDir() error {
-	if !config.EnableCachePersistence {
+	if !cfg.EnableCachePersistence {
 		return nil
 	}
-
-	dir := filepath.Dir(config.CachePersistenceFile)
-
+	dir := filepath.Dir(cfg.CachePersistenceFile)
 	// Check if directory exists
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		// Try to create the directory
@@ -263,7 +262,7 @@ func ensureCacheDir() error {
 			}
 
 			// Update the config to use the working path
-			config.CachePersistenceFile = altPath
+			cfg.CachePersistenceFile = altPath
 			logutil.Logger.Warnf("Using alternative cache persistence path: %s", altPath)
 			return nil
 		}
@@ -281,7 +280,7 @@ func ensureCacheDir() error {
 
 // SaveCacheToFile persists the current cache state to disk
 func SaveCacheToFile() error {
-	if !config.EnableCachePersistence || DnsCache == nil {
+	if !cfg.EnableCachePersistence || DnsCache == nil {
 		return nil
 	}
 
@@ -340,7 +339,7 @@ func SaveCacheToFile() error {
 	}
 
 	// Use a more efficient JSON encoding approach for large caches
-	file, err := os.OpenFile(config.CachePersistenceFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(cfg.CachePersistenceFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to create cache file: %w", err)
 	}
@@ -359,13 +358,13 @@ func SaveCacheToFile() error {
 	}
 
 	logutil.Logger.Debugf("Cache persisted to disk: %d entries saved to %s", len(entries),
-		config.CachePersistenceFile)
+		cfg.CachePersistenceFile)
 	return nil
 }
 
 // LoadCacheFromFile loads the cache state from disk
 func LoadCacheFromFile() error {
-	if !config.EnableCachePersistence {
+	if !cfg.EnableCachePersistence {
 		return nil
 	}
 
@@ -374,14 +373,14 @@ func LoadCacheFromFile() error {
 		logutil.Logger.Warnf("Cache directory check failed, but continuing to load: %v", err)
 	}
 
-	if _, err := os.Stat(config.CachePersistenceFile); os.IsNotExist(err) {
+	if _, err := os.Stat(cfg.CachePersistenceFile); os.IsNotExist(err) {
 		logutil.Logger.Info("No cache persistence file found, starting with empty cache")
 		return nil
 	}
 
 	logutil.Logger.Debug("Loading cache from disk")
 
-	data, err := os.ReadFile(config.CachePersistenceFile)
+	data, err := os.ReadFile(cfg.CachePersistenceFile)
 	if err != nil {
 		return fmt.Errorf("failed to read cache file: %w", err) // Return error if file read fails
 	}
@@ -392,9 +391,9 @@ func LoadCacheFromFile() error {
 		return fmt.Errorf("failed to unmarshal cache data: %w", err)
 	}
 	// Check if the cache file is too old
-	if time.Since(snapshot.Timestamp) > config.CachePersistenceMaxAge {
+	if time.Since(snapshot.Timestamp) > cfg.CachePersistenceMaxAge {
 		logutil.Logger.Warnf("Cache persistence file is too old (%v > %v), starting with empty cache",
-			time.Since(snapshot.Timestamp), config.CachePersistenceMaxAge)
+			time.Since(snapshot.Timestamp), cfg.CachePersistenceMaxAge)
 		return nil
 	}
 	loadedCount := 0
@@ -452,13 +451,13 @@ func LoadCacheFromFile() error {
 	atomic.StoreInt64(&cacheHits, snapshot.Stats.TotalHits)
 	atomic.StoreInt64(&cacheRequests, snapshot.Stats.TotalRequests)
 
-	logutil.Logger.Infof("Cache loaded from disk: %d entries restored from %s", loadedCount, config.CachePersistenceFile)
+	logutil.Logger.Infof("Cache loaded from disk: %d entries restored from %s", loadedCount, cfg.CachePersistenceFile)
 	return nil
 }
 
 // StartCachePersistence starts the periodic cache persistence
 func StartCachePersistence() {
-	if !config.EnableCachePersistence {
+	if !cfg.EnableCachePersistence {
 		return
 	}
 
@@ -468,7 +467,7 @@ func StartCachePersistence() {
 		return
 	}
 
-	persistenceTicker = time.NewTicker(config.CachePersistenceInterval)
+	persistenceTicker = time.NewTicker(cfg.CachePersistenceInterval)
 	go func() {
 		defer persistenceTicker.Stop()
 		for range persistenceTicker.C {
@@ -478,7 +477,7 @@ func StartCachePersistence() {
 		}
 	}()
 
-	logutil.Logger.Infof("Cache persistence enabled with interval: %v", config.CachePersistenceInterval)
+	logutil.Logger.Infof("Cache persistence enabled with interval: %v", cfg.CachePersistenceInterval)
 }
 
 // StopCachePersistence stops the periodic cache persistence and saves one final time
@@ -487,7 +486,7 @@ func StopCachePersistence() {
 		persistenceTicker.Stop()
 	}
 
-	if config.EnableCachePersistence {
+	if cfg.EnableCachePersistence {
 		if err := SaveCacheToFile(); err != nil {
 			logutil.Logger.Errorf("Failed to save cache during shutdown: %v", err)
 		} else {
@@ -497,7 +496,7 @@ func StopCachePersistence() {
 }
 
 func StartCacheStatsLogger() {
-	ticker := time.NewTicker(config.DefaultDNSStatslog)
+	ticker := time.NewTicker(cfg.DNSStatslog)
 	go func() {
 		defer ticker.Stop()
 		for range ticker.C {

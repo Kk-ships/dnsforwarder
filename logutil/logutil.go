@@ -17,6 +17,8 @@ const (
 	flushTimeout = 5 * time.Second
 )
 
+var cfg = config.Get()
+
 // LogMessage represents a buffered log message
 type LogMessage struct {
 	FormattedData []byte // Already formatted by logrus
@@ -226,5 +228,5 @@ func init() {
 		FullTimestamp: true,
 		DisableColors: true,
 	})
-	SetLogLevel(config.LogLevel)
+	SetLogLevel(cfg.LogLevel)
 }

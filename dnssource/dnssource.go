@@ -19,7 +19,8 @@ var (
 	PublicServersFallback    []string                    // Copy of public servers for fallback
 	allServersToTest         map[string]bool             // Map to hold all servers to test for reachability
 	PrivateServersCache      []string                    // Cache for private servers which are healthy
-	PublicServersCache       []string                    // Cache for public servers which are healthy
+	PublicServersCache       []string
+	cfg                      = config.Get() // Cache for public servers which are healthy
 )
 
 type metricsRecorderInterface interface {
@@ -30,12 +31,12 @@ type metricsRecorderInterface interface {
 }
 
 func InitDNSSource(metricsRecorder metricsRecorderInterface) {
-	addServersToSet(config.PrivateServers, PrivateServersSet)
-	addServersToSet(config.PublicServers, PublicServersSet)
-	PrivateAndPublicFallback = append(config.PrivateServers, config.PublicServers...)
-	PublicServersFallback = config.PublicServers[:] // Create a copy
-	logutil.Logger.Infof("Private servers: %v", config.PrivateServers)
-	logutil.Logger.Infof("Public servers: %v", config.PublicServers)
+	addServersToSet(cfg.PrivateServers, PrivateServersSet)
+	addServersToSet(cfg.PublicServers, PublicServersSet)
+	PrivateAndPublicFallback = append(cfg.PrivateServers, cfg.PublicServers...)
+	PublicServersFallback = cfg.PublicServers[:] // Create a copy
+	logutil.Logger.Infof("Private servers: %v", cfg.PrivateServers)
+	logutil.Logger.Infof("Public servers: %v", cfg.PublicServers)
 	logutil.Logger.Infof("Combined servers: %v", PrivateAndPublicFallback)
 	logutil.Logger.Debug("InitDNSSource: end")
 }
@@ -68,7 +69,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	}
 
 	upstreamServerCount := len(servers)
-	if config.EnableMetrics {
+	if cfg.EnableMetrics {
 		metricsRecorder.SetUpstreamServersTotal(upstreamServerCount)
 	}
 	allServersToTest = make(map[string]bool)
@@ -86,7 +87,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 		reachablePublic  = make([]string, 0, len(publicServers))  // preallocate
 		mu               sync.Mutex
 		wg               sync.WaitGroup
-		sem              = make(chan struct{}, config.DefaultWorkerCount)
+		sem              = make(chan struct{}, cfg.WorkerCount)
 	)
 
 	for _, server := range uniqueServers {
@@ -97,7 +98,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 			defer func() { <-sem }()
 
 			m := dnsMsgPool.Get().(*dns.Msg)
-			m.SetQuestion(config.DefaultTestDomain+".", dns.TypeA)
+			m.SetQuestion(cfg.TestDomain+".", dns.TypeA)
 			m.RecursionDesired = true
 
 			_, rtt, err := dnsClient.Exchange(m, svr)
@@ -105,7 +106,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 
 			if err != nil {
 				logutil.Logger.Warnf("server %s is not reachable: %v", svr, err)
-				if config.EnableMetrics {
+				if cfg.EnableMetrics {
 					metricsRecorder.SetUpstreamServerReachable(svr, false)
 					metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
 					metricsRecorder.RecordError("upstream_unreachable", "health_check")
@@ -113,7 +114,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 				return
 			}
 
-			if config.EnableMetrics {
+			if cfg.EnableMetrics {
 				metricsRecorder.SetUpstreamServerReachable(svr, true)
 				metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
 			}
@@ -129,7 +130,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 
 	wg.Wait()
 	if len(reachablePrivate)+len(reachablePublic) == 0 {
-		if config.EnableMetrics {
+		if cfg.EnableMetrics {
 			metricsRecorder.RecordError("no_reachable_servers", "health_check")
 		}
 		logutil.Logger.Warn("No reachable DNS servers found")

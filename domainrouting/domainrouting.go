@@ -9,30 +9,33 @@ import (
 	"time"
 )
 
-var RoutingTable = make(map[string]string)
+var (
+	RoutingTable = make(map[string]string)
+	cfg          = config.Get()
+)
 
 func InitializeDomainRouting() {
-	if !config.EnableDomainRouting {
+	if !cfg.EnableDomainRouting {
 		return
 	}
 	// Check if the domain routing folder is specified
-	if config.DomainRoutingFolder == "" {
+	if cfg.DomainRoutingFolder == "" {
 		logutil.Logger.Fatalf("Domain routing is enabled but no folder is specified")
 	}
-	logutil.Logger.Infof("Domain routing enabled with folder: %v", config.DomainRoutingFolder)
-	loadRoutingTable(config.DomainRoutingFolder)
+	logutil.Logger.Infof("Domain routing enabled with folder: %v", cfg.DomainRoutingFolder)
+	loadRoutingTable(cfg.DomainRoutingFolder)
 	if len(RoutingTable) == 0 {
-		logutil.Logger.Fatalf("No domain routing entries found in folder: %s", config.DomainRoutingFolder)
+		logutil.Logger.Fatalf("No domain routing entries found in folder: %s", cfg.DomainRoutingFolder)
 	}
 	// refresh routing table every DomainRoutingTableReloadInterval seconds
-	logutil.Logger.Debugf("Domain routing table will be refreshed every %d seconds", config.DomainRoutingTableReloadInterval)
+	logutil.Logger.Debugf("Domain routing table will be refreshed every %d seconds", cfg.DomainRoutingTableReloadInterval)
 	go func() {
-		ticker := time.NewTicker(time.Duration(config.DomainRoutingTableReloadInterval) * time.Second)
+		ticker := time.NewTicker(time.Duration(cfg.DomainRoutingTableReloadInterval) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			loadRoutingTable(config.DomainRoutingFolder)
+			loadRoutingTable(cfg.DomainRoutingFolder)
 			if len(RoutingTable) == 0 {
-				logutil.Logger.Fatalf("No domain routing entries found after refresh in folder: %s", config.DomainRoutingFolder)
+				logutil.Logger.Fatalf("No domain routing entries found after refresh in folder: %s", cfg.DomainRoutingFolder)
 			}
 		}
 	}()

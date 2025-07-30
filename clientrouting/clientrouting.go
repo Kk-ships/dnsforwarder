@@ -18,10 +18,11 @@ var (
 	// MAC address cache using go-cache
 	macCache    *cache.Cache
 	macCacheTTL = 5 * time.Minute // Cache MAC addresses for 5 minutes
+	cfg         = config.Get()
 )
 
 func InitializeClientRouting() {
-	if !config.EnableClientRouting {
+	if !cfg.EnableClientRouting {
 		return
 	}
 	logutil.Logger.Info("Client-based DNS routing enabled")
@@ -29,8 +30,8 @@ func InitializeClientRouting() {
 	// Initialize MAC address cache
 	macCache = cache.New(macCacheTTL, 2*macCacheTTL)
 
-	storeClientsToMap(config.PublicOnlyClients, &PublicOnlyClientsMap, "IP")
-	storeMACsToMap(config.PublicOnlyClientMACs, &PublicOnlyClientMACsMap)
+	storeClientsToMap(cfg.PublicOnlyClients, &PublicOnlyClientsMap, "IP")
+	storeMACsToMap(cfg.PublicOnlyClientMACs, &PublicOnlyClientMACsMap)
 
 	logutil.Logger.Debug("InitializeClientRouting: end")
 }
@@ -83,7 +84,7 @@ func getMACWithCache(clientIP string) string {
 }
 
 func ShouldUsePublicServers(clientIP string) bool {
-	if !config.EnableClientRouting {
+	if !cfg.EnableClientRouting {
 		return false
 	}
 
