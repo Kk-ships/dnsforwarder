@@ -5,6 +5,7 @@ import (
 	"dnsloadbalancer/dnssource"
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
+	"sync/atomic"
 	"time"
 
 	"sync"
@@ -16,15 +17,25 @@ import (
 
 var (
 	metricsRecorder = metric.MetricsRecorderInstance
-	dnsUsageStats   = make(map[string]int)
-	statsMutex      sync.Mutex
+	dnsUsageStats   = make(map[string]*int64) // Changed to atomic counters
+	statsMutex      sync.RWMutex              // Use RWMutex for better read performance
 	dnsMsgPool      = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
-	cfg             = config.Get()
+	dnsClientPool   = sync.Pool{New: func() interface{} {
+		return &dns.Client{
+			Timeout: config.Get().DNSTimeout,
+			Net:     "udp",
+		}
+	}}
+	cfg = config.Get()
 )
 
 func UpdateDNSServersCache() {
 	cacheRefresh := cfg.CacheRefresh
-	dnsClient := &dns.Client{Timeout: cfg.DNSTimeout}
+	dnsClient := dnsClientPool.Get().(*dns.Client)
+	defer dnsClientPool.Put(dnsClient)
+	if dnsClient.Timeout != cfg.DNSTimeout {
+		dnsClient.Timeout = cfg.DNSTimeout
+	}
 
 	ticker := time.NewTicker(cacheRefresh)
 	go func() {
@@ -45,6 +56,8 @@ func UpdateDNSServersCache() {
 
 func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
 	m := dnsMsgPool.Get().(*dns.Msg)
+	// Reset the message to ensure clean state
+	*m = dns.Msg{}
 	m.SetQuestion(dns.Fqdn(domain), qtype)
 	m.RecursionDesired = true
 	return m
@@ -95,21 +108,57 @@ func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Ms
 }
 
 func exchangeWithServer(m *dns.Msg, svr string) ([]dns.RR, error) {
-	dnsClient := &dns.Client{Timeout: cfg.DNSTimeout}
+	// Get pooled DNS client for better performance
+	dnsClient := dnsClientPool.Get().(*dns.Client)
+	defer dnsClientPool.Put(dnsClient)
+
+	// Update timeout from current config if needed
+	if dnsClient.Timeout != cfg.DNSTimeout {
+		dnsClient.Timeout = cfg.DNSTimeout
+	}
+
 	response, rtt, err := dnsClient.Exchange(m, svr)
 	if err == nil && response != nil {
-		statsMutex.Lock()
-		dnsUsageStats[svr]++
-		statsMutex.Unlock()
+		// Use atomic operations for stats - faster than mutex
+		incrementServerUsage(svr)
 		if cfg.EnableMetrics {
 			metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
 		}
 		return response.Answer, nil
 	}
-	logutil.Logger.Warnf("Exchange error using server %s: %v", svr, err)
+	// Only log errors at debug level to reduce log noise in high-traffic scenarios
+	logutil.Logger.Debugf("Exchange error using server %s: %v", svr, err)
 	if cfg.EnableMetrics {
 		metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
 		metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
 	}
 	return nil, err
+}
+
+// incrementServerUsage atomically increments the usage counter for a server
+func incrementServerUsage(server string) {
+	statsMutex.RLock()
+	counter, exists := dnsUsageStats[server]
+	statsMutex.RUnlock()
+	if !exists {
+		statsMutex.Lock()
+		// Double-check after acquiring write lock
+		if counter, exists = dnsUsageStats[server]; !exists {
+			counter = new(int64)
+			dnsUsageStats[server] = counter
+		}
+		statsMutex.Unlock()
+	}
+	atomic.AddInt64(counter, 1)
+}
+
+// GetServerUsageStats returns a snapshot of server usage statistics
+func GetServerUsageStats() map[string]int64 {
+	statsMutex.RLock()
+	defer statsMutex.RUnlock()
+	stats := make(map[string]int64, len(dnsUsageStats))
+	for server, counter := range dnsUsageStats {
+		stats[server] = atomic.LoadInt64(counter)
+	}
+	return stats
 }
