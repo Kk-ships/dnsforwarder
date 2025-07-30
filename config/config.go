@@ -39,6 +39,10 @@ type Config struct {
 	// Metrics Configuration
 	MetricsPort   string
 	EnableMetrics bool
+	// Fast metrics are always enabled for optimal performance
+	// These configurations remain for compatibility and future tuning
+	MetricsBatchSize  int           // Batch size for metric updates
+	MetricsBatchDelay time.Duration // Delay between metric batches
 
 	// Client Routing Configuration
 	PublicOnlyClients    []string
@@ -94,8 +98,10 @@ func loadConfig() *Config {
 		CacheTTL:  util.GetEnvDuration("DNS_CACHE_TTL", 30*time.Minute),
 
 		// Metrics Configuration
-		MetricsPort:   util.GetEnvString("METRICS_PORT", ":8080"),
-		EnableMetrics: util.GetEnvBool("ENABLE_METRICS", true),
+		MetricsPort:       util.GetEnvString("METRICS_PORT", ":8080"),
+		EnableMetrics:     util.GetEnvBool("ENABLE_METRICS", true),
+		MetricsBatchSize:  util.GetEnvInt("METRICS_BATCH_SIZE", 500),
+		MetricsBatchDelay: util.GetEnvDuration("METRICS_BATCH_DELAY", 100*time.Millisecond),
 
 		// Client Routing Configuration
 		PublicOnlyClients:    util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", ""),
