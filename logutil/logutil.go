@@ -15,9 +15,28 @@ const (
 	logBufferSize = 1000
 	// Timeout for flushing logs on shutdown
 	flushTimeout = 5 * time.Second
+	// Batch size for processing messages
+	batchSize = 10
 )
 
-var cfg = config.Get()
+var (
+	cfg = config.Get()
+	// Byte slice pool to reduce allocations - stores pointers to avoid SA6002
+	bytePool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 0, 1024)
+			return &buf
+		},
+	}
+	// Log level map for faster lookups
+	logLevels = map[string]log.Level{
+		"debug": log.DebugLevel,
+		"info":  log.InfoLevel,
+		"warn":  log.WarnLevel,
+		"error": log.ErrorLevel,
+		"fatal": log.FatalLevel,
+	}
+)
 
 // LogMessage represents a buffered log message
 type LogMessage struct {
@@ -35,8 +54,8 @@ type BufferedLogger struct {
 	wg      sync.WaitGroup
 	once    sync.Once
 	realOut io.Writer
-	mu      sync.Mutex // protects closed state
-	writeMu sync.Mutex // protects writes to realOut
+	mu      sync.RWMutex // Use RWMutex for better read performance
+	writeMu sync.Mutex   // protects writes to realOut
 	closed  bool
 }
 
@@ -55,45 +74,48 @@ func (bl *BufferedLogger) writeToOutput(data []byte) {
 	}
 }
 
-// drainLogMessage processes a single log message and writes it to the output
-func (bl *BufferedLogger) drainLogMessage(logMsg LogMessage) {
-	// The data is already formatted by logrus, write it directly
-	bl.writeToOutput(logMsg.FormattedData)
-}
-
 // bufferedWriter implements io.Writer and sends log messages to the buffer channel
 type bufferedWriter struct {
 	logger *BufferedLogger
 }
 
 func (bw *bufferedWriter) Write(p []byte) (n int, err error) {
-	// Check if logger is closed
-	bw.logger.mu.Lock()
+	// Check if logger is closed using RLock for better performance
+	bw.logger.mu.RLock()
 	closed := bw.logger.closed
-	bw.logger.mu.Unlock()
+	bw.logger.mu.RUnlock()
 
 	if closed {
 		// If logger is closed, write directly using synchronized method
-		// The data is already formatted by logrus, so formatting is consistent
 		bw.logger.writeToOutput(p)
 		return len(p), nil
 	}
 
-	// Create a copy of the bytes to avoid potential data races
-	// (the original slice might be reused by logrus)
-	dataCopy := make([]byte, len(p))
-	copy(dataCopy, p)
+	// Get a byte slice pointer from the pool
+	bufPtr := bytePool.Get().(*[]byte)
+	defer bytePool.Put(bufPtr)
+
+	buf := *bufPtr
+	// Reset length but keep capacity
+	buf = buf[:0]
+
+	// Ensure we have enough capacity
+	if cap(buf) < len(p) {
+		buf = make([]byte, len(p))
+	} else {
+		buf = buf[:len(p)]
+	}
+	copy(buf, p)
+	*bufPtr = buf // Update the pointer's target
 
 	// Send to buffer channel (non-blocking with select and default case)
 	select {
 	case bw.logger.logChan <- LogMessage{
-		FormattedData: dataCopy,
+		FormattedData: buf,
 	}:
 		// Successfully buffered
 	default:
 		// If buffer is full, write directly using synchronized method to prevent blocking
-		// This maintains consistent formatting (data is already formatted by logrus)
-		// and prevents race conditions through synchronized writes
 		bw.logger.writeToOutput(p)
 	}
 
@@ -101,25 +123,53 @@ func (bw *bufferedWriter) Write(p []byte) (n int, err error) {
 }
 
 // logWorker processes log messages from the buffer channel
+// Uses batching to reduce lock contention and improve throughput
 func (bl *BufferedLogger) logWorker() {
 	defer bl.wg.Done()
+
+	batch := make([]LogMessage, 0, batchSize)
+	ticker := time.NewTicker(10 * time.Millisecond) // Flush batch periodically
+	defer ticker.Stop()
 
 	for {
 		select {
 		case logMsg := <-bl.logChan:
-			// Format and write the log message directly to the real output
-			bl.drainLogMessage(logMsg)
+			batch = append(batch, logMsg)
+
+			// Process batch if it's full or if we need to check for done signal
+			if len(batch) >= batchSize {
+				bl.processBatch(batch)
+				batch = batch[:0] // Reset slice but keep capacity
+			}
+
+		case <-ticker.C:
+			// Flush any pending messages in batch
+			if len(batch) > 0 {
+				bl.processBatch(batch)
+				batch = batch[:0]
+			}
 
 		case <-bl.done:
-			// Drain remaining messages before exiting
-			for {
-				select {
-				case logMsg := <-bl.logChan:
-					bl.drainLogMessage(logMsg)
-				default:
-					return
-				}
+			// Process any remaining batch
+			if len(batch) > 0 {
+				bl.processBatch(batch)
 			}
+			// Drain remaining messages before exiting
+			bl.drainRemainingMessages()
+			return
+		}
+	}
+}
+
+// processBatch writes a batch of log messages efficiently
+func (bl *BufferedLogger) processBatch(batch []LogMessage) {
+	bl.writeMu.Lock()
+	defer bl.writeMu.Unlock()
+
+	for _, logMsg := range batch {
+		if _, err := bl.realOut.Write(logMsg.FormattedData); err != nil {
+			// Ignore write errors to maintain non-blocking behavior
+			_ = err
 		}
 	}
 }
@@ -161,10 +211,16 @@ func (bl *BufferedLogger) Flush() {
 
 // drainRemainingMessages drains any messages left in the channel
 func (bl *BufferedLogger) drainRemainingMessages() {
+	bl.writeMu.Lock()
+	defer bl.writeMu.Unlock()
+
 	for {
 		select {
 		case logMsg := <-bl.logChan:
-			bl.drainLogMessage(logMsg)
+			if _, err := bl.realOut.Write(logMsg.FormattedData); err != nil {
+				// Ignore write errors to maintain non-blocking behavior
+				_ = err
+			}
 		default:
 			return
 		}
@@ -205,18 +261,9 @@ func (bl *BufferedLogger) SetFormatter(formatter log.Formatter) {
 }
 
 func SetLogLevel(level string) {
-	switch level {
-	case "debug":
-		Logger.SetLevel(log.DebugLevel)
-	case "info":
-		Logger.SetLevel(log.InfoLevel)
-	case "warn":
-		Logger.SetLevel(log.WarnLevel)
-	case "error":
-		Logger.SetLevel(log.ErrorLevel)
-	case "fatal":
-		Logger.SetLevel(log.FatalLevel)
-	default:
+	if logLevel, exists := logLevels[level]; exists {
+		Logger.SetLevel(logLevel)
+	} else {
 		Logger.SetLevel(log.InfoLevel)
 	}
 }
