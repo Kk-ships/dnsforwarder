@@ -9,6 +9,7 @@ import (
 	"dnsloadbalancer/dnssource"
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
+	"dnsloadbalancer/metric"
 	"dnsloadbalancer/util"
 	"os"
 	"os/signal"
@@ -23,14 +24,20 @@ var cfg = config.Get()
 type dnsHandler struct{}
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	start := time.Now()
 	logutil.Logger.Debug("ServeDNS: start")
 	defer logutil.Logger.Debug("ServeDNS: end")
+
 	msg := new(dns.Msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
 
+	var queryType = "unknown"
+	var status = "success"
+
 	if len(r.Question) > 0 {
 		q := r.Question[0]
+		queryType = dns.TypeToString[q.Qtype]
 		clientIP := util.GetClientIP(w)
 		logutil.Logger.Debugf("ServeDNS: clientIP=%s, q.Name=%s, q.Qtype=%d", clientIP, q.Name, q.Qtype)
 		answers := cache.ResolverWithCache(
@@ -43,11 +50,19 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
-
+		status = "write_failed"
 		if cfg.EnableMetrics {
-			metricsRecorder.RecordError("dns_response_write_failed", "dns_handler")
+			// Always use fast metrics for minimal performance impact
+			metric.FastMetricsInstance.FastRecordError("dns_response_write_failed", "dns_handler")
 		}
 		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
+	}
+
+	// Record DNS query metric with minimal performance impact
+	if cfg.EnableMetrics {
+		duration := time.Since(start)
+		// Always use fast metrics - atomic counters + batched updates
+		metric.FastMetricsInstance.FastRecordDNSQuery(queryType, status, duration)
 	}
 }
 
@@ -56,9 +71,9 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: start")
 	defer logutil.Logger.Debug("StartDNSServer: end")
 	// --- Initialization ---
-	cache.Init(cfg.CacheTTL, cfg.EnableMetrics, metricsRecorder, cfg.EnableClientRouting, cfg.EnableDomainRouting)
+	cache.Init(cfg.CacheTTL, cfg.EnableMetrics, metric.FastMetricsInstance, cfg.EnableClientRouting, cfg.EnableDomainRouting)
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
-	dnssource.InitDNSSource(metricsRecorder)
+	dnssource.InitDNSSource(metric.FastMetricsInstance)
 	logutil.Logger.Debug("StartDNSServer: dns source initialized")
 	dnsresolver.UpdateDNSServersCache()
 	logutil.Logger.Debug("StartDNSServer: dns servers cache updated")
@@ -70,8 +85,8 @@ func StartDNSServer() {
 	// Start cache stats and metrics logging in background
 	cache.StartCacheStatsLogger()
 	if cfg.EnableMetrics {
-		go StartMetricsServer()
-		go StartMetricsUpdater()
+		go metric.StartMetricsServer()
+		go metric.StartMetricsUpdater()
 		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", cfg.MetricsPort)
 	}
 

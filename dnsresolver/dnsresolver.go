@@ -16,11 +16,11 @@ import (
 )
 
 var (
-	metricsRecorder = metric.MetricsRecorderInstance
-	dnsUsageStats   = make(map[string]*int64) // Changed to atomic counters
-	statsMutex      sync.RWMutex              // Use RWMutex for better read performance
-	dnsMsgPool      = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
-	dnsClientPool   = sync.Pool{New: func() interface{} {
+	fastMetricsRecorder = metric.FastMetricsInstance
+	dnsUsageStats       = make(map[string]*int64) // Changed to atomic counters
+	statsMutex          sync.RWMutex              // Use RWMutex for better read performance
+	dnsMsgPool          = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
+	dnsClientPool       = sync.Pool{New: func() interface{} {
 		return &dns.Client{
 			Timeout: config.Get().DNSTimeout,
 			Net:     "udp",
@@ -42,7 +42,7 @@ func UpdateDNSServersCache() {
 		defer ticker.Stop()
 		for range ticker.C {
 			dnssource.UpdateDNSServersCache(
-				metricsRecorder,
+				fastMetricsRecorder, // Use fast metrics for all DNS operations
 				cacheRefresh,
 				cfg.EnableClientRouting,
 				cfg.PrivateServers,
@@ -122,15 +122,15 @@ func exchangeWithServer(m *dns.Msg, svr string) ([]dns.RR, error) {
 		// Use atomic operations for stats - faster than mutex
 		incrementServerUsage(svr)
 		if cfg.EnableMetrics {
-			metricsRecorder.RecordUpstreamQuery(svr, "success", rtt)
+			fastMetricsRecorder.FastRecordUpstreamQuery(svr, "success", rtt)
 		}
 		return response.Answer, nil
 	}
 	// Only log errors at debug level to reduce log noise in high-traffic scenarios
 	logutil.Logger.Debugf("Exchange error using server %s: %v", svr, err)
 	if cfg.EnableMetrics {
-		metricsRecorder.RecordUpstreamQuery(svr, "error", rtt)
-		metricsRecorder.RecordError("upstream_query_failed", "dns_exchange")
+		fastMetricsRecorder.FastRecordUpstreamQuery(svr, "error", rtt)
+		fastMetricsRecorder.FastRecordError("upstream_query_failed", "dns_exchange")
 	}
 	return nil, err
 }
