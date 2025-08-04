@@ -4,6 +4,7 @@ import (
 	"context"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,9 @@ type FastMetricsRecorder struct {
 	cacheHitsCount   uint64
 	cacheMissesCount uint64
 	errorsCount      uint64
+
+	// Device IP specific DNS query counts
+	deviceIPCounts sync.Map // map[string]*uint64
 
 	// Channel for batched metric updates to reduce Prometheus contention
 	metricUpdates chan metricUpdate
@@ -49,6 +53,7 @@ const (
 	MetricTypeCacheSize
 	MetricTypeUpstreamServerReachable
 	MetricTypeUpstreamServersTotal
+	MetricTypeDeviceIPDNSQuery
 )
 
 func NewFastMetricsRecorder() *FastMetricsRecorder {
@@ -93,6 +98,8 @@ func validateLabels(metricType uint8, labels []string) bool {
 		return len(labels) >= 2 // Requires: server, status
 	case MetricTypeUpstreamServerReachable:
 		return len(labels) >= 1 // Requires: server
+	case MetricTypeDeviceIPDNSQuery:
+		return len(labels) >= 1 // Requires: device_ip
 	case MetricTypeCacheHit, MetricTypeCacheMiss, MetricTypeCacheSize, MetricTypeUpstreamServersTotal:
 		return true // No labels required
 	default:
@@ -162,6 +169,11 @@ func NewUpstreamServersTotalUpdate(total int) metricUpdate {
 	return NewMetricUpdateWithValue(MetricTypeUpstreamServersTotal, float64(total))
 }
 
+// NewDeviceIPDNSQueryUpdate creates a device IP DNS query metric update
+func NewDeviceIPDNSQueryUpdate(deviceIP string, count uint64) metricUpdate {
+	return NewMetricUpdateWithValue(MetricTypeDeviceIPDNSQuery, float64(count), deviceIP)
+}
+
 // ConditionalTimer provides efficient timing that only works when metrics are enabled
 type ConditionalTimer struct {
 	start   time.Time
@@ -201,9 +213,30 @@ func StartCacheTimer(metricsEnabled bool) ConditionalTimer {
 	return StartConditionalTimer(metricsEnabled)
 }
 
+// incrementDeviceIPCount atomically increments the DNS query count for a specific device IP
+func (f *FastMetricsRecorder) incrementDeviceIPCount(deviceIP string) {
+	val, loaded := f.deviceIPCounts.Load(deviceIP)
+	if !loaded {
+		var zero uint64 = 0
+		ptr := &zero
+		val, _ = f.deviceIPCounts.LoadOrStore(deviceIP, ptr)
+	}
+	atomic.AddUint64(val.(*uint64), 1)
+}
+
 // FastRecordDNSQuery records a DNS query with minimal allocations
 func (f *FastMetricsRecorder) FastRecordDNSQuery(queryType, status string, duration time.Duration) {
+	f.FastRecordDNSQueryWithDeviceIP(queryType, status, "", duration)
+}
+
+// FastRecordDNSQueryWithDeviceIP records a DNS query with device IP tracking
+func (f *FastMetricsRecorder) FastRecordDNSQueryWithDeviceIP(queryType, status, deviceIP string, duration time.Duration) {
 	atomic.AddUint64(&f.dnsQueriesCount, 1)
+
+	// Track device IP specific count if provided
+	if deviceIP != "" {
+		f.incrementDeviceIPCount(deviceIP)
+	}
 
 	// Non-blocking send to batch processor
 	select {
@@ -283,20 +316,6 @@ func (f *FastMetricsRecorder) FastRecordError(errorType, source string) {
 	}
 }
 
-// FastRecordDNSQueryWithExtraLabels demonstrates flexibility with more than 2 labels
-// This could be used for future metrics that need additional dimensions
-func (f *FastMetricsRecorder) FastRecordDNSQueryWithExtraLabels(queryType, status, clientIP, region string, duration time.Duration) {
-	atomic.AddUint64(&f.dnsQueriesCount, 1)
-
-	// Non-blocking send to batch processor with 4 labels
-	// Note: Current Prometheus metrics only use first 2 labels, but this shows flexibility
-	select {
-	case f.metricUpdates <- NewMetricUpdateWithDuration(MetricTypeDNSQuery, duration, queryType, status, clientIP, region):
-	default:
-		// Channel full, skip to avoid blocking DNS responses
-	}
-}
-
 // FastRecordCustomMetric allows recording metrics with arbitrary label combinations
 // This demonstrates the full flexibility of the new design
 func (f *FastMetricsRecorder) FastRecordCustomMetric(metricType uint8, labels ...string) {
@@ -311,6 +330,18 @@ func (f *FastMetricsRecorder) FastRecordCustomMetric(metricType uint8, labels ..
 	}
 }
 
+// FastUpdateDeviceIPMetrics sends device IP DNS query counts to Prometheus
+func (f *FastMetricsRecorder) FastUpdateDeviceIPMetrics() {
+	deviceIPCounts := f.GetAllDeviceIPCounts()
+	for ip, count := range deviceIPCounts {
+		select {
+		case f.metricUpdates <- NewDeviceIPDNSQueryUpdate(ip, count):
+		default:
+			// Channel full, skip to avoid blocking
+		}
+	}
+}
+
 // processBatchedUpdates processes metric updates in batches to reduce Prometheus contention
 func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay time.Duration) {
 	defer f.wg.Done()
@@ -318,6 +349,10 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 
 	ticker := time.NewTicker(batchDelay)
 	defer ticker.Stop()
+
+	// Device IP metrics update interval (every 10 batch intervals)
+	deviceIPUpdateCounter := 0
+	deviceIPUpdateInterval := 10
 
 	updates := make([]metricUpdate, 0, batchSize) // Pre-allocate slice
 
@@ -339,6 +374,13 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 			if len(updates) > 0 {
 				f.flushUpdates(updates)
 				updates = updates[:0] // Reset slice but keep capacity
+			}
+
+			// Periodically update device IP metrics
+			deviceIPUpdateCounter++
+			if deviceIPUpdateCounter >= deviceIPUpdateInterval {
+				f.FastUpdateDeviceIPMetrics()
+				deviceIPUpdateCounter = 0
 			}
 		}
 
@@ -392,6 +434,12 @@ func (f *FastMetricsRecorder) flushUpdates(updates []metricUpdate) {
 
 		case MetricTypeUpstreamServersTotal:
 			upstreamServersTotal.Set(update.Value)
+
+		case MetricTypeDeviceIPDNSQuery:
+			// Device IP DNS query requires exactly 1 label: device_ip
+			if len(update.Labels) >= 1 {
+				deviceIPDNSQueries.WithLabelValues(update.Labels[0]).Set(update.Value)
+			}
 		}
 	}
 }
@@ -422,6 +470,67 @@ func (f *FastMetricsRecorder) GetStats() (dnsQueries, cacheHits, cacheMisses, er
 		atomic.LoadUint64(&f.cacheHitsCount),
 		atomic.LoadUint64(&f.cacheMissesCount),
 		atomic.LoadUint64(&f.errorsCount)
+}
+
+// GetDeviceIPCount returns the DNS query count for a specific device IP
+func (f *FastMetricsRecorder) GetDeviceIPCount(deviceIP string) uint64 {
+	val, ok := f.deviceIPCounts.Load(deviceIP)
+	if !ok {
+		return 0
+	}
+	return atomic.LoadUint64(val.(*uint64))
+}
+
+// GetAllDeviceIPCounts returns a map of all device IPs and their DNS query counts
+func (f *FastMetricsRecorder) GetAllDeviceIPCounts() map[string]uint64 {
+	result := make(map[string]uint64)
+	f.deviceIPCounts.Range(func(key, value any) bool {
+		result[key.(string)] = atomic.LoadUint64(value.(*uint64))
+		return true
+	})
+	return result
+}
+
+// GetTopDeviceIPs returns the top N device IPs by query count
+func (f *FastMetricsRecorder) GetTopDeviceIPs(n int) []struct {
+	IP    string
+	Count uint64
+} {
+	type deviceCount struct {
+		IP    string
+		Count uint64
+	}
+
+	var devices []deviceCount
+	f.deviceIPCounts.Range(func(key, value any) bool {
+		devices = append(devices, deviceCount{
+			IP:    key.(string),
+			Count: atomic.LoadUint64(value.(*uint64)),
+		})
+		return true
+	})
+
+	// Sort devices by count in descending order
+	sort.Slice(devices, func(i, j int) bool {
+		return devices[i].Count > devices[j].Count
+	})
+
+	// Return top N
+	if n > len(devices) {
+		n = len(devices)
+	}
+
+	result := make([]struct {
+		IP    string
+		Count uint64
+	}, n)
+
+	for i := 0; i < n; i++ {
+		result[i].IP = devices[i].IP
+		result[i].Count = devices[i].Count
+	}
+
+	return result
 }
 
 // drainMetricUpdates drains any remaining updates from the channel during shutdown

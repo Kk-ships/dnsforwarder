@@ -100,6 +100,13 @@ var (
 		},
 		[]string{"type", "source"},
 	)
+	deviceIPDNSQueries = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dns_device_ip_queries_total",
+			Help: "Total number of DNS queries per device IP",
+		},
+		[]string{"device_ip"},
+	)
 )
 
 var (
@@ -138,6 +145,7 @@ func init() {
 		memoryUsage,
 		goroutineCount,
 		errorsTotal,
+		deviceIPDNSQueries,
 	)
 }
 
@@ -288,4 +296,17 @@ func GetMemoryUsage() uint64 {
 func updateSystemMetrics() {
 	goroutineCount.Set(float64(GetGoroutineCount()))
 	memoryUsage.Set(float64(GetMemoryUsage()))
+
+	// Update device IP DNS query metrics from FastMetricsRecorder
+	if fastMetricsInstance != nil {
+		deviceIPCounts := fastMetricsInstance.GetAllDeviceIPCounts()
+		UpdateDeviceIPDNSMetrics(deviceIPCounts)
+	}
+}
+
+// UpdateDeviceIPDNSMetrics updates Prometheus metrics for device IP DNS query counts
+func UpdateDeviceIPDNSMetrics(deviceIPCounts map[string]uint64) {
+	for ip, count := range deviceIPCounts {
+		deviceIPDNSQueries.WithLabelValues(ip).Set(float64(count))
+	}
 }

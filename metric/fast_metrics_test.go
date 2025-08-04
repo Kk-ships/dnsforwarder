@@ -12,8 +12,8 @@ func TestFlexibleLabels(t *testing.T) {
 	// Test DNS query with standard 2 labels
 	recorder.FastRecordDNSQuery("A", "success", 100*time.Millisecond)
 
-	// Test DNS query with extra labels (demonstrates flexibility)
-	recorder.FastRecordDNSQueryWithExtraLabels("A", "success", "192.168.1.1", "us-west", 100*time.Millisecond)
+	// Test DNS query with device IP tracking
+	recorder.FastRecordDNSQueryWithDeviceIP("A", "success", "192.168.1.1", 100*time.Millisecond)
 
 	// Test upstream server reachable with single label (no empty string placeholders)
 	recorder.FastSetUpstreamServerReachable("8.8.8.8", true)
@@ -46,6 +46,69 @@ func TestFlexibleLabels(t *testing.T) {
 
 	if errors != 1 {
 		t.Errorf("Expected 1 error, got %d", errors)
+	}
+}
+
+func TestDeviceIPTracking(t *testing.T) {
+	recorder := NewFastMetricsRecorder()
+
+	// Record DNS queries with different device IPs
+	recorder.FastRecordDNSQueryWithDeviceIP("A", "success", "192.168.1.100", 50*time.Millisecond)
+	recorder.FastRecordDNSQueryWithDeviceIP("AAAA", "success", "192.168.1.100", 60*time.Millisecond)
+	recorder.FastRecordDNSQueryWithDeviceIP("A", "success", "192.168.1.101", 70*time.Millisecond)
+	recorder.FastRecordDNSQueryWithDeviceIP("PTR", "success", "192.168.1.100", 80*time.Millisecond)
+
+	// Test individual device IP counts
+	count100 := recorder.GetDeviceIPCount("192.168.1.100")
+	if count100 != 3 {
+		t.Errorf("Expected 3 queries for 192.168.1.100, got %d", count100)
+	}
+
+	count101 := recorder.GetDeviceIPCount("192.168.1.101")
+	if count101 != 1 {
+		t.Errorf("Expected 1 query for 192.168.1.101, got %d", count101)
+	}
+
+	// Test non-existent device IP
+	countNone := recorder.GetDeviceIPCount("192.168.1.200")
+	if countNone != 0 {
+		t.Errorf("Expected 0 queries for non-existent IP, got %d", countNone)
+	}
+
+	// Test getting all device IP counts
+	allCounts := recorder.GetAllDeviceIPCounts()
+	if len(allCounts) != 2 {
+		t.Errorf("Expected 2 unique device IPs, got %d", len(allCounts))
+	}
+
+	// Test top device IPs
+	topDevices := recorder.GetTopDeviceIPs(2)
+	if len(topDevices) != 2 {
+		t.Errorf("Expected 2 top devices, got %d", len(topDevices))
+	}
+
+	// First device should be 192.168.1.100 with 3 queries
+	if topDevices[0].IP != "192.168.1.100" || topDevices[0].Count != 3 {
+		t.Errorf("Expected top device 192.168.1.100 with 3 queries, got %s with %d", topDevices[0].IP, topDevices[0].Count)
+	}
+
+	// Second device should be 192.168.1.101 with 1 query
+	if topDevices[1].IP != "192.168.1.101" || topDevices[1].Count != 1 {
+		t.Errorf("Expected second device 192.168.1.101 with 1 query, got %s with %d", topDevices[1].IP, topDevices[1].Count)
+	}
+
+	// Test that DNS queries without device IP don't affect device tracking
+	recorder.FastRecordDNSQuery("MX", "success", 90*time.Millisecond)
+
+	// Device counts should remain the same
+	if recorder.GetDeviceIPCount("192.168.1.100") != 3 {
+		t.Errorf("Device IP count changed after query without device IP")
+	}
+
+	// But total DNS query count should increase
+	dnsQueries, _, _, _ := recorder.GetStats()
+	if dnsQueries != 5 {
+		t.Errorf("Expected 5 total DNS queries, got %d", dnsQueries)
 	}
 }
 
