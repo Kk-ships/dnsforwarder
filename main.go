@@ -35,7 +35,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	msg.Authoritative = true
 
 	var queryType = "unknown"
-	var status = "success"
+	var queryStatus = "success" // Status of DNS query resolution
 
 	if len(r.Question) > 0 {
 		q := r.Question[0]
@@ -48,23 +48,27 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if answers != nil {
 			msg.Answer = answers
 			logutil.Logger.Debugf("ServeDNS: got answers for %s", q.Name)
+		} else {
+			queryStatus = "no_answers" // DNS resolution didn't find answers
 		}
+	} else {
+		queryStatus = "no_questions" // Invalid DNS query format
 	}
 
-	if err := w.WriteMsg(msg); err != nil {
-		status = "write_failed"
-		if cfg.EnableMetrics {
-			// Always use fast metrics for minimal performance impact
-			metric.GetFastMetricsInstance().FastRecordError("dns_response_write_failed", "dns_handler")
-		}
-		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
-	}
-
-	// Record DNS query metric with minimal performance impact
+	// Record DNS query metric first (based on resolution success)
 	if cfg.EnableMetrics {
 		duration := timer.Elapsed()
 		// Always use fast metrics - atomic counters + batched updates
-		metric.GetFastMetricsInstance().FastRecordDNSQuery(queryType, status, duration)
+		metric.GetFastMetricsInstance().FastRecordDNSQuery(queryType, queryStatus, duration)
+	}
+
+	// Handle response writing separately from query metrics
+	if err := w.WriteMsg(msg); err != nil {
+		if cfg.EnableMetrics {
+			// Record write failure as a separate metric
+			metric.GetFastMetricsInstance().FastRecordError("dns_response_write_failed", "dns_handler")
+		}
+		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 	}
 }
 
