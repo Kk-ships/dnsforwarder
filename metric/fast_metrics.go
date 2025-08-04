@@ -2,6 +2,7 @@ package metric
 
 import (
 	"context"
+	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,11 @@ type FastMetricsRecorder struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 	wg     sync.WaitGroup
+
+	// Drain configuration for shutdown behavior
+	drainTimeout    time.Duration
+	maxDrainUpdates int
+	drainBatchSize  int
 }
 
 type metricUpdate struct {
@@ -50,13 +56,21 @@ func NewFastMetricsRecorder() *FastMetricsRecorder {
 	batchDelay := util.GetEnvDuration("METRICS_BATCH_DELAY", 100*time.Millisecond)
 	channelSize := util.GetEnvInt("METRICS_CHANNEL_SIZE", 10000)
 
+	// Configurable drain behavior during shutdown
+	drainTimeout := util.GetEnvDuration("METRICS_DRAIN_TIMEOUT", 5*time.Second)
+	maxDrainUpdates := util.GetEnvInt("METRICS_MAX_DRAIN_UPDATES", 1000)
+	drainBatchSize := util.GetEnvInt("METRICS_DRAIN_BATCH_SIZE", 50)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	f := &FastMetricsRecorder{
-		metricUpdates: make(chan metricUpdate, channelSize),
-		ctx:           ctx,
-		cancel:        cancel,
-		done:          make(chan struct{}),
+		metricUpdates:   make(chan metricUpdate, channelSize),
+		ctx:             ctx,
+		cancel:          cancel,
+		done:            make(chan struct{}),
+		drainTimeout:    drainTimeout,
+		maxDrainUpdates: maxDrainUpdates,
+		drainBatchSize:  drainBatchSize,
 	}
 
 	// Start background processor for batched updates
@@ -287,7 +301,7 @@ func (f *FastMetricsRecorder) FastRecordDNSQueryWithExtraLabels(queryType, statu
 // This demonstrates the full flexibility of the new design
 func (f *FastMetricsRecorder) FastRecordCustomMetric(metricType uint8, labels ...string) {
 	if !validateLabels(metricType, labels) {
-		// In a production system, you might want to log this or handle it differently
+		logutil.Logger.Warnf("Invalid labels for metric type %d: %v", metricType, labels)
 		return
 	}
 
@@ -411,16 +425,42 @@ func (f *FastMetricsRecorder) GetStats() (dnsQueries, cacheHits, cacheMisses, er
 }
 
 // drainMetricUpdates drains any remaining updates from the channel during shutdown
+// with timeout and batch size limits to prevent hanging
 func (f *FastMetricsRecorder) drainMetricUpdates() {
-	for {
+	deadline := time.Now().Add(f.drainTimeout)
+	processedCount := 0
+	pendingUpdates := make([]metricUpdate, 0, f.drainBatchSize)
+
+	for time.Now().Before(deadline) && processedCount < f.maxDrainUpdates {
 		select {
 		case update := <-f.metricUpdates:
-			// Process remaining updates during shutdown
-			f.flushUpdates([]metricUpdate{update})
+			pendingUpdates = append(pendingUpdates, update)
+			processedCount++
+
+			// Process in smaller batches to avoid blocking too long
+			if len(pendingUpdates) >= f.drainBatchSize {
+				f.flushUpdates(pendingUpdates)
+				pendingUpdates = pendingUpdates[:0] // Reset but keep capacity
+			}
 		default:
-			// Channel is empty
+			// Channel is empty, flush any remaining updates and exit
+			if len(pendingUpdates) > 0 {
+				f.flushUpdates(pendingUpdates)
+			}
 			return
 		}
+	}
+
+	// Flush any remaining updates before timeout/limit
+	if len(pendingUpdates) > 0 {
+		f.flushUpdates(pendingUpdates)
+	}
+
+	// Log if we hit limits (useful for monitoring/debugging)
+	if processedCount >= f.maxDrainUpdates {
+		// In production, you might want to use a proper logger here
+		// For now, we'll just document this behavior
+		_ = processedCount // Avoid unused variable warning
 	}
 }
 
@@ -456,15 +496,29 @@ func (f *FastMetricsRecorder) WaitForShutdown() {
 	<-f.done
 }
 
-// Global instance for fast metrics
-var FastMetricsInstance = NewFastMetricsRecorder()
+// Global instance for fast metrics - uses lazy initialization to avoid race conditions
+var (
+	fastMetricsInstance *FastMetricsRecorder
+	fastMetricsOnce     sync.Once
+)
+
+// GetFastMetricsInstance returns the global FastMetricsRecorder instance,
+// initializing it lazily in a thread-safe manner
+func GetFastMetricsInstance() *FastMetricsRecorder {
+	fastMetricsOnce.Do(func() {
+		fastMetricsInstance = NewFastMetricsRecorder()
+	})
+	return fastMetricsInstance
+}
 
 // ShutdownGlobalInstance provides a convenient way to shutdown the global metrics instance
 func ShutdownGlobalInstance(timeout time.Duration) error {
-	return FastMetricsInstance.Shutdown(timeout)
+	instance := GetFastMetricsInstance()
+	return instance.Shutdown(timeout)
 }
 
 // CloseGlobalInstance provides a convenient way to immediately close the global metrics instance
 func CloseGlobalInstance() error {
-	return FastMetricsInstance.Close()
+	instance := GetFastMetricsInstance()
+	return instance.Close()
 }

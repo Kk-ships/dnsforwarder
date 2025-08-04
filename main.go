@@ -55,7 +55,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		status = "write_failed"
 		if cfg.EnableMetrics {
 			// Always use fast metrics for minimal performance impact
-			metric.FastMetricsInstance.FastRecordError("dns_response_write_failed", "dns_handler")
+			metric.GetFastMetricsInstance().FastRecordError("dns_response_write_failed", "dns_handler")
 		}
 		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 	}
@@ -64,7 +64,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	if cfg.EnableMetrics {
 		duration := timer.Elapsed()
 		// Always use fast metrics - atomic counters + batched updates
-		metric.FastMetricsInstance.FastRecordDNSQuery(queryType, status, duration)
+		metric.GetFastMetricsInstance().FastRecordDNSQuery(queryType, status, duration)
 	}
 }
 
@@ -73,9 +73,9 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: start")
 	defer logutil.Logger.Debug("StartDNSServer: end")
 	// --- Initialization ---
-	cache.Init(cfg.CacheTTL, cfg.EnableMetrics, metric.FastMetricsInstance, cfg.EnableClientRouting, cfg.EnableDomainRouting)
+	cache.Init(cfg.CacheTTL, cfg.EnableMetrics, metric.GetFastMetricsInstance(), cfg.EnableClientRouting, cfg.EnableDomainRouting)
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
-	dnssource.InitDNSSource(metric.FastMetricsInstance)
+	dnssource.InitDNSSource(metric.GetFastMetricsInstance())
 	logutil.Logger.Debug("StartDNSServer: dns source initialized")
 	dnsresolver.UpdateDNSServersCache()
 	logutil.Logger.Debug("StartDNSServer: dns servers cache updated")
@@ -125,7 +125,7 @@ func StartDNSServer() {
 				logutil.Logger.Warnf("Metrics shutdown timed out: %v", err)
 				// Force close if graceful shutdown times out
 				if closeErr := metric.CloseGlobalInstance(); closeErr != nil {
-					logutil.Logger.Errorf("Failed to force close metrics recorder: %v", closeErr)
+					logutil.Logger.Errorf("Failed to force close metrics instance: %v", closeErr)
 				}
 			} else {
 				logutil.Logger.Debug("Metrics recorder shut down gracefully")

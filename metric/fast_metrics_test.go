@@ -145,8 +145,8 @@ func TestShutdownTimeout(t *testing.T) {
 	}
 
 	// Clean up
-	if closeErr := recorder.Close(); closeErr != nil {
-		t.Errorf("Failed to close recorder: %v", closeErr)
+	if err := recorder.Close(); err != nil {
+		t.Errorf("Failed to close metrics recorder: %v", err)
 	}
 }
 
