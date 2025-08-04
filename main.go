@@ -24,7 +24,9 @@ var cfg = config.Get()
 type dnsHandler struct{}
 
 func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
-	start := time.Now()
+	// Use conditional timer to avoid time.Now() overhead when metrics are disabled
+	timer := metric.StartDNSQueryTimer(cfg.EnableMetrics)
+
 	logutil.Logger.Debug("ServeDNS: start")
 	defer logutil.Logger.Debug("ServeDNS: end")
 
@@ -60,7 +62,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	// Record DNS query metric with minimal performance impact
 	if cfg.EnableMetrics {
-		duration := time.Since(start)
+		duration := timer.Elapsed()
 		// Always use fast metrics - atomic counters + batched updates
 		metric.FastMetricsInstance.FastRecordDNSQuery(queryType, status, duration)
 	}
@@ -115,6 +117,20 @@ func StartDNSServer() {
 
 		// Stop cache persistence and save final state
 		cache.StopCachePersistence()
+
+		// Shutdown metrics recording gracefully
+		if cfg.EnableMetrics {
+			logutil.Logger.Debug("Shutting down metrics recorder...")
+			if err := metric.ShutdownGlobalInstance(3 * time.Second); err != nil {
+				logutil.Logger.Warnf("Metrics shutdown timed out: %v", err)
+				// Force close if graceful shutdown times out
+				if closeErr := metric.CloseGlobalInstance(); closeErr != nil {
+					logutil.Logger.Errorf("Failed to force close metrics recorder: %v", closeErr)
+				}
+			} else {
+				logutil.Logger.Debug("Metrics recorder shut down gracefully")
+			}
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

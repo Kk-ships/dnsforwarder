@@ -142,7 +142,8 @@ func LoadFromCache(key string) ([]dns.RR, bool) {
 }
 
 func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
-	start := time.Now()
+	// Use conditional timer to avoid time.Now() overhead when metrics are disabled
+	timer := metric.StartCacheTimer(EnableMetrics)
 	key := CacheKey(domain, qtype)
 	atomic.AddInt64(&cacheRequests, 1)
 	qTypeStr := dns.TypeToString[qtype]
@@ -150,7 +151,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		atomic.AddInt64(&cacheHits, 1)
 		if EnableMetrics {
 			metric.FastMetricsInstance.FastRecordCacheHit()
-			metric.FastMetricsInstance.FastRecordDNSQuery(qTypeStr, "cached", time.Since(start))
+			metric.FastMetricsInstance.FastRecordDNSQuery(qTypeStr, "cached", timer.Elapsed())
 		}
 		return answers
 	}
@@ -172,7 +173,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		// Removed goroutine - cache negative responses directly
 		SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
 		if EnableMetrics {
-			metric.FastMetricsInstance.FastRecordDNSQuery(qTypeStr, status, time.Since(start))
+			metric.FastMetricsInstance.FastRecordDNSQuery(qTypeStr, status, timer.Elapsed())
 		}
 		return answers
 	}
@@ -214,7 +215,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	// Removed goroutine - cache positive responses directly for better performance
 	SaveToCache(key, answers, ttl)
 	if EnableMetrics {
-		metric.FastMetricsInstance.FastRecordDNSQuery(qTypeStr, status, time.Since(start))
+		metric.FastMetricsInstance.FastRecordDNSQuery(qTypeStr, status, timer.Elapsed())
 	}
 	return answers
 }
