@@ -107,6 +107,20 @@ var (
 		},
 		[]string{"device_ip"},
 	)
+	domainQueriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dns_domain_queries_total",
+			Help: "Total number of DNS queries per domain",
+		},
+		[]string{"domain", "status"},
+	)
+	domainHitsTotal = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dns_domain_hits_total",
+			Help: "Total number of hits per domain",
+		},
+		[]string{"domain"},
+	)
 )
 
 var (
@@ -146,6 +160,8 @@ func init() {
 		goroutineCount,
 		errorsTotal,
 		deviceIPDNSQueries,
+		domainQueriesTotal,
+		domainHitsTotal,
 	)
 }
 
@@ -191,6 +207,14 @@ func (m *MetricsRecorder) UpdateCacheSize(size int) {
 
 func (m *MetricsRecorder) RecordError(errorType, source string) {
 	errorsTotal.WithLabelValues(errorType, source).Inc()
+}
+
+func (m *MetricsRecorder) RecordDomainQuery(domain, status string) {
+	domainQueriesTotal.WithLabelValues(domain, status).Inc()
+}
+
+func (m *MetricsRecorder) RecordDomainHit(domain string, hitCount uint64) {
+	domainHitsTotal.WithLabelValues(domain).Set(float64(hitCount))
 }
 
 var MetricsRecorderInstance = NewMetricsRecorder()
@@ -301,6 +325,10 @@ func updateSystemMetrics() {
 	if fastMetricsInstance != nil {
 		deviceIPCounts := fastMetricsInstance.GetAllDeviceIPCounts()
 		UpdateDeviceIPDNSMetrics(deviceIPCounts)
+
+		// Update domain metrics
+		domainHitCounts := fastMetricsInstance.GetAllDomainHitCounts()
+		UpdateDomainHitMetrics(domainHitCounts)
 	}
 }
 
@@ -308,5 +336,12 @@ func updateSystemMetrics() {
 func UpdateDeviceIPDNSMetrics(deviceIPCounts map[string]uint64) {
 	for ip, count := range deviceIPCounts {
 		deviceIPDNSQueries.WithLabelValues(ip).Set(float64(count))
+	}
+}
+
+// UpdateDomainHitMetrics updates Prometheus metrics for domain hit counts
+func UpdateDomainHitMetrics(domainHitCounts map[string]uint64) {
+	for domain, count := range domainHitCounts {
+		domainHitsTotal.WithLabelValues(domain).Set(float64(count))
 	}
 }

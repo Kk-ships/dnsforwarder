@@ -22,6 +22,10 @@ type FastMetricsRecorder struct {
 	// Device IP specific DNS query counts
 	deviceIPCounts sync.Map // map[string]*uint64
 
+	// Domain specific DNS query counts and hit tracking
+	domainQueryCounts sync.Map // map[string]*uint64
+	domainHitCounts   sync.Map // map[string]*uint64
+
 	// Channel for batched metric updates to reduce Prometheus contention
 	metricUpdates chan metricUpdate
 
@@ -54,6 +58,8 @@ const (
 	MetricTypeUpstreamServerReachable
 	MetricTypeUpstreamServersTotal
 	MetricTypeDeviceIPDNSQuery
+	MetricTypeDomainQuery
+	MetricTypeDomainHit
 )
 
 func NewFastMetricsRecorder() *FastMetricsRecorder {
@@ -100,6 +106,10 @@ func validateLabels(metricType uint8, labels []string) bool {
 		return len(labels) >= 1 // Requires: server
 	case MetricTypeDeviceIPDNSQuery:
 		return len(labels) >= 1 // Requires: device_ip
+	case MetricTypeDomainQuery:
+		return len(labels) >= 2 // Requires: domain, status
+	case MetricTypeDomainHit:
+		return len(labels) >= 1 // Requires: domain
 	case MetricTypeCacheHit, MetricTypeCacheMiss, MetricTypeCacheSize, MetricTypeUpstreamServersTotal:
 		return true // No labels required
 	default:
@@ -174,6 +184,16 @@ func NewDeviceIPDNSQueryUpdate(deviceIP string, count uint64) metricUpdate {
 	return NewMetricUpdateWithValue(MetricTypeDeviceIPDNSQuery, float64(count), deviceIP)
 }
 
+// NewDomainQueryUpdate creates a domain query metric update
+func NewDomainQueryUpdate(domain, status string) metricUpdate {
+	return NewMetricUpdate(MetricTypeDomainQuery, domain, status)
+}
+
+// NewDomainHitUpdate creates a domain hit metric update
+func NewDomainHitUpdate(domain string, hitCount uint64) metricUpdate {
+	return NewMetricUpdateWithValue(MetricTypeDomainHit, float64(hitCount), domain)
+}
+
 // ConditionalTimer provides efficient timing that only works when metrics are enabled
 type ConditionalTimer struct {
 	start   time.Time
@@ -224,6 +244,29 @@ func (f *FastMetricsRecorder) incrementDeviceIPCount(deviceIP string) {
 	atomic.AddUint64(val.(*uint64), 1)
 }
 
+// incrementDomainQueryCount atomically increments the DNS query count for a specific domain
+func (f *FastMetricsRecorder) incrementDomainQueryCount(domain string) {
+	val, loaded := f.domainQueryCounts.Load(domain)
+	if !loaded {
+		var zero uint64 = 0
+		ptr := &zero
+		val, _ = f.domainQueryCounts.LoadOrStore(domain, ptr)
+	}
+	atomic.AddUint64(val.(*uint64), 1)
+}
+
+// incrementDomainHitCount atomically increments the hit count for a specific domain
+// and returns the new count value
+func (f *FastMetricsRecorder) incrementDomainHitCount(domain string) uint64 {
+	val, loaded := f.domainHitCounts.Load(domain)
+	if !loaded {
+		var zero uint64 = 0
+		ptr := &zero
+		val, _ = f.domainHitCounts.LoadOrStore(domain, ptr)
+	}
+	return atomic.AddUint64(val.(*uint64), 1)
+}
+
 // FastRecordDNSQuery records a DNS query with minimal allocations
 func (f *FastMetricsRecorder) FastRecordDNSQuery(queryType, status string, duration time.Duration) {
 	f.FastRecordDNSQueryWithDeviceIP(queryType, status, "", duration)
@@ -231,11 +274,27 @@ func (f *FastMetricsRecorder) FastRecordDNSQuery(queryType, status string, durat
 
 // FastRecordDNSQueryWithDeviceIP records a DNS query with device IP tracking
 func (f *FastMetricsRecorder) FastRecordDNSQueryWithDeviceIP(queryType, status, deviceIP string, duration time.Duration) {
+	f.FastRecordDNSQueryWithDeviceIPAndDomain(queryType, status, deviceIP, "", duration)
+}
+
+// FastRecordDNSQueryWithDeviceIPAndDomain records a DNS query with device IP and domain tracking
+func (f *FastMetricsRecorder) FastRecordDNSQueryWithDeviceIPAndDomain(queryType, status, deviceIP, domain string, duration time.Duration) {
 	atomic.AddUint64(&f.dnsQueriesCount, 1)
 
 	// Track device IP specific count if provided
 	if deviceIP != "" {
 		f.incrementDeviceIPCount(deviceIP)
+	}
+
+	// Track domain specific count if provided
+	if domain != "" {
+		f.incrementDomainQueryCount(domain)
+		// Send domain query update
+		select {
+		case f.metricUpdates <- NewDomainQueryUpdate(domain, status):
+		default:
+			// Channel full, skip to avoid blocking DNS responses
+		}
 	}
 
 	// Non-blocking send to batch processor
@@ -342,6 +401,30 @@ func (f *FastMetricsRecorder) FastUpdateDeviceIPMetrics() {
 	}
 }
 
+// FastRecordDomainHit records a domain hit
+func (f *FastMetricsRecorder) FastRecordDomainHit(domain string) {
+	newCount := f.incrementDomainHitCount(domain)
+
+	// Send domain hit update to batch processor
+	select {
+	case f.metricUpdates <- NewDomainHitUpdate(domain, newCount):
+	default:
+		// Channel full, skip to avoid blocking
+	}
+}
+
+// FastUpdateDomainMetrics sends domain metrics to Prometheus
+func (f *FastMetricsRecorder) FastUpdateDomainMetrics() {
+	domainHitCounts := f.GetAllDomainHitCounts()
+	for domain, count := range domainHitCounts {
+		select {
+		case f.metricUpdates <- NewDomainHitUpdate(domain, count):
+		default:
+			// Channel full, skip to avoid blocking
+		}
+	}
+}
+
 // processBatchedUpdates processes metric updates in batches to reduce Prometheus contention
 func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay time.Duration) {
 	defer f.wg.Done()
@@ -376,10 +459,11 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 				updates = updates[:0] // Reset slice but keep capacity
 			}
 
-			// Periodically update device IP metrics
+			// Periodically update device IP and domain metrics
 			deviceIPUpdateCounter++
 			if deviceIPUpdateCounter >= deviceIPUpdateInterval {
 				f.FastUpdateDeviceIPMetrics()
+				f.FastUpdateDomainMetrics()
 				deviceIPUpdateCounter = 0
 			}
 		}
@@ -440,6 +524,18 @@ func (f *FastMetricsRecorder) flushUpdates(updates []metricUpdate) {
 			if len(update.Labels) >= 1 {
 				deviceIPDNSQueries.WithLabelValues(update.Labels[0]).Set(update.Value)
 			}
+
+		case MetricTypeDomainQuery:
+			// Domain query requires exactly 2 labels: domain, status
+			if len(update.Labels) >= 2 {
+				domainQueriesTotal.WithLabelValues(update.Labels[0], update.Labels[1]).Inc()
+			}
+
+		case MetricTypeDomainHit:
+			// Domain hit requires exactly 1 label: domain
+			if len(update.Labels) >= 1 {
+				domainHitsTotal.WithLabelValues(update.Labels[0]).Set(update.Value)
+			}
 		}
 	}
 }
@@ -491,6 +587,44 @@ func (f *FastMetricsRecorder) GetAllDeviceIPCounts() map[string]uint64 {
 	return result
 }
 
+// GetDomainQueryCount returns the DNS query count for a specific domain
+func (f *FastMetricsRecorder) GetDomainQueryCount(domain string) uint64 {
+	val, ok := f.domainQueryCounts.Load(domain)
+	if !ok {
+		return 0
+	}
+	return atomic.LoadUint64(val.(*uint64))
+}
+
+// GetAllDomainQueryCounts returns a map of all domains and their DNS query counts
+func (f *FastMetricsRecorder) GetAllDomainQueryCounts() map[string]uint64 {
+	result := make(map[string]uint64)
+	f.domainQueryCounts.Range(func(key, value any) bool {
+		result[key.(string)] = atomic.LoadUint64(value.(*uint64))
+		return true
+	})
+	return result
+}
+
+// GetDomainHitCount returns the hit count for a specific domain
+func (f *FastMetricsRecorder) GetDomainHitCount(domain string) uint64 {
+	val, ok := f.domainHitCounts.Load(domain)
+	if !ok {
+		return 0
+	}
+	return atomic.LoadUint64(val.(*uint64))
+}
+
+// GetAllDomainHitCounts returns a map of all domains and their hit counts
+func (f *FastMetricsRecorder) GetAllDomainHitCounts() map[string]uint64 {
+	result := make(map[string]uint64)
+	f.domainHitCounts.Range(func(key, value any) bool {
+		result[key.(string)] = atomic.LoadUint64(value.(*uint64))
+		return true
+	})
+	return result
+}
+
 // GetTopDeviceIPs returns the top N device IPs by query count
 func (f *FastMetricsRecorder) GetTopDeviceIPs(n int) []struct {
 	IP    string
@@ -528,6 +662,90 @@ func (f *FastMetricsRecorder) GetTopDeviceIPs(n int) []struct {
 	for i := 0; i < n; i++ {
 		result[i].IP = devices[i].IP
 		result[i].Count = devices[i].Count
+	}
+
+	return result
+}
+
+// GetTopDomainsByQueries returns the top N domains by query count
+func (f *FastMetricsRecorder) GetTopDomainsByQueries(n int) []struct {
+	Domain string
+	Count  uint64
+} {
+	type domainCount struct {
+		Domain string
+		Count  uint64
+	}
+
+	var domains []domainCount
+	f.domainQueryCounts.Range(func(key, value any) bool {
+		domains = append(domains, domainCount{
+			Domain: key.(string),
+			Count:  atomic.LoadUint64(value.(*uint64)),
+		})
+		return true
+	})
+
+	// Sort domains by count in descending order
+	sort.Slice(domains, func(i, j int) bool {
+		return domains[i].Count > domains[j].Count
+	})
+
+	// Return top N
+	if n > len(domains) {
+		n = len(domains)
+	}
+
+	result := make([]struct {
+		Domain string
+		Count  uint64
+	}, n)
+
+	for i := 0; i < n; i++ {
+		result[i].Domain = domains[i].Domain
+		result[i].Count = domains[i].Count
+	}
+
+	return result
+}
+
+// GetTopDomainsByHits returns the top N domains by hit count
+func (f *FastMetricsRecorder) GetTopDomainsByHits(n int) []struct {
+	Domain string
+	Count  uint64
+} {
+	type domainCount struct {
+		Domain string
+		Count  uint64
+	}
+
+	var domains []domainCount
+	f.domainHitCounts.Range(func(key, value any) bool {
+		domains = append(domains, domainCount{
+			Domain: key.(string),
+			Count:  atomic.LoadUint64(value.(*uint64)),
+		})
+		return true
+	})
+
+	// Sort domains by count in descending order
+	sort.Slice(domains, func(i, j int) bool {
+		return domains[i].Count > domains[j].Count
+	})
+
+	// Return top N
+	if n > len(domains) {
+		n = len(domains)
+	}
+
+	result := make([]struct {
+		Domain string
+		Count  uint64
+	}, n)
+
+	for i := 0; i < n; i++ {
+		result[i].Domain = domains[i].Domain
+		result[i].Count = domains[i].Count
 	}
 
 	return result
