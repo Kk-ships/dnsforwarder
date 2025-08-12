@@ -303,6 +303,14 @@ When `ENABLE_METRICS=true`, the following metrics are available at `/metrics` en
 - `dns_server_memory_usage_bytes` - Memory usage
 - `dns_server_goroutines` - Active goroutines
 
+#### Error Metrics
+- `dns_errors_total` - Total DNS errors (by error type and source)
+
+#### Device IP and Domain Metrics
+- `dns_device_ip_queries_total` - Total DNS queries per device IP
+- `dns_domain_queries_total` - Total DNS queries per domain (by domain and status)
+- `dns_domain_hits_total` - Total hits per domain
+
 #### Health Check Endpoints
 - `/health` - Simple health check (returns "OK")
 - `/status` - JSON status response
