@@ -5,7 +5,6 @@ import (
 	"dnsloadbalancer/util"
 	"net/http"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -127,26 +126,28 @@ var (
 
 var (
 	metricsUpdateInterval time.Duration
-	// Removed redundant atomic counters - Prometheus metrics already track these
-	// Pre-allocated runtime.MemStats to reduce GC pressure
-	memStatsPool = sync.Pool{
-		New: func() interface{} {
-			return &runtime.MemStats{}
-		},
-	}
 	// Pre-allocated HTTP response strings to avoid allocations
 	healthResponse = []byte("OK")
 	statusResponse = []byte(`{"status":"running","service":"dns-forwarder"}`)
-	// Cache for expensive system metrics to reduce runtime calls
-	lastSystemMetricsUpdate    time.Time
-	systemMetricsCacheDuration = 5 * time.Second // Cache system metrics for 5 seconds
-	cachedGoroutines           int
-	cachedMemoryUsage          uint64
-	systemMetricsMutex         sync.RWMutex
+	// Optimized system metrics cache
+	systemMetricsCache *SystemMetricsCache
 )
 
 func init() {
 	metricsUpdateInterval = util.GetEnvDuration("METRICS_UPDATE_INTERVAL", 30*time.Second)
+
+	// Initialize system metrics cache with optimized functions
+	systemMetricsCache = NewSystemMetricsCache(
+		5*time.Second, // Cache duration
+		func() int { return runtime.NumGoroutine() },
+		func() uint64 {
+			// Use optimized memory stats with pooling
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			return m.Alloc
+		},
+	)
+
 	prometheus.MustRegister(
 		dnsQueriesTotal,
 		dnsQueryDuration,
@@ -265,58 +266,14 @@ func StartMetricsServer() {
 	}()
 }
 
-// GetGoroutineCount returns the current number of goroutines with caching
+// GetGoroutineCount returns the current number of goroutines using optimized cache
 func GetGoroutineCount() int {
-	systemMetricsMutex.RLock()
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		count := cachedGoroutines
-		systemMetricsMutex.RUnlock()
-		return count
-	}
-	systemMetricsMutex.RUnlock()
-
-	systemMetricsMutex.Lock()
-	// Double-check after acquiring write lock
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		count := cachedGoroutines
-		systemMetricsMutex.Unlock()
-		return count
-	}
-
-	cachedGoroutines = runtime.NumGoroutine()
-	lastSystemMetricsUpdate = time.Now()
-	count := cachedGoroutines
-	systemMetricsMutex.Unlock()
-	return count
+	return systemMetricsCache.GetGoroutineCount()
 }
 
-// GetMemoryUsage returns the current memory usage in bytes with caching and optimized allocation
+// GetMemoryUsage returns the current memory usage in bytes using optimized cache
 func GetMemoryUsage() uint64 {
-	systemMetricsMutex.RLock()
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		usage := cachedMemoryUsage
-		systemMetricsMutex.RUnlock()
-		return usage
-	}
-	systemMetricsMutex.RUnlock()
-
-	systemMetricsMutex.Lock()
-	// Double-check after acquiring write lock
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		usage := cachedMemoryUsage
-		systemMetricsMutex.Unlock()
-		return usage
-	}
-
-	m := memStatsPool.Get().(*runtime.MemStats)
-	defer memStatsPool.Put(m)
-
-	runtime.ReadMemStats(m)
-	cachedMemoryUsage = m.Alloc
-	lastSystemMetricsUpdate = time.Now()
-	usage := cachedMemoryUsage
-	systemMetricsMutex.Unlock()
-	return usage
+	return systemMetricsCache.GetMemoryUsage()
 }
 
 func updateSystemMetrics() {
