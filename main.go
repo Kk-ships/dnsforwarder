@@ -37,10 +37,12 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	var queryType = "unknown"
 	var queryStatus = "success" // Status of DNS query resolution
 	var clientIP = ""
+	var domain = ""
 	if len(r.Question) > 0 {
 		q := r.Question[0]
 		queryType = dns.TypeToString[q.Qtype]
 		clientIP = util.GetClientIP(w)
+		domain = q.Name
 		logutil.Logger.Debugf("ServeDNS: clientIP=%s, q.Name=%s, q.Qtype=%d", clientIP, q.Name, q.Qtype)
 		answers := cache.ResolverWithCache(
 			q.Name, q.Qtype, clientIP,
@@ -55,11 +57,11 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		queryStatus = "no_questions" // Invalid DNS query format
 	}
 
-	// Record DNS query metric with device IP tracking
+	// Record DNS query metric with device IP and domain tracking
 	if cfg.EnableMetrics {
 		duration := timer.Elapsed()
-		// Use the combined method to record both DNS query and device IP in one call
-		metric.GetFastMetricsInstance().FastRecordDNSQueryWithDeviceIP(queryType, queryStatus, clientIP, duration)
+		// Use the combined method to record DNS query, device IP, and domain in one call
+		metric.GetFastMetricsInstance().FastRecordDNSQueryWithDeviceIPAndDomain(queryType, queryStatus, clientIP, domain, duration)
 	}
 
 	// Handle response writing separately from query metrics

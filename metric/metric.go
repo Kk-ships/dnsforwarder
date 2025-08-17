@@ -100,24 +100,26 @@ var (
 		},
 		[]string{"type", "source"},
 	)
+	// Device IP metrics
 	deviceIPDNSQueries = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "dns_device_ip_queries_total",
-			Help: "Total number of DNS queries per device IP",
+			Help: "Total number of DNS queries by device IP",
 		},
 		[]string{"device_ip"},
 	)
+	// Domain metrics
 	domainQueriesTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dns_domain_queries_total",
-			Help: "Total number of DNS queries per domain",
+			Help: "Total number of DNS queries by domain",
 		},
 		[]string{"domain", "status"},
 	)
 	domainHitsTotal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "dns_domain_hits_total",
-			Help: "Total number of hits per domain",
+			Help: "Total number of cache hits by domain",
 		},
 		[]string{"domain"},
 	)

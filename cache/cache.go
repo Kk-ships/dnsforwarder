@@ -152,6 +152,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		if EnableMetrics {
 			metric.GetFastMetricsInstance().FastRecordCacheHit()
 			metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "cached", timer.Elapsed())
+			// Record domain hit for cache hits
+			metric.GetFastMetricsInstance().FastRecordDomainHit(domain)
 		}
 		return answers
 	}
