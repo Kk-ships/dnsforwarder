@@ -18,6 +18,13 @@ type FastMetricsRecorder struct {
 	cacheMissesCount uint64
 	errorsCount      uint64
 
+	// Device IP specific DNS query counts
+	deviceIPCounts sync.Map // map[string]*uint64
+
+	// Domain specific DNS query counts and hit tracking
+	domainQueryCounts sync.Map // map[string]*uint64
+	domainHitCounts   sync.Map // map[string]*uint64
+
 	// Channel for batched metric updates to reduce Prometheus contention
 	metricUpdates chan metricUpdate
 
@@ -49,6 +56,9 @@ const (
 	MetricTypeCacheSize
 	MetricTypeUpstreamServerReachable
 	MetricTypeUpstreamServersTotal
+	MetricTypeDeviceIPDNSQuery
+	MetricTypeDomainQuery
+	MetricTypeDomainHit
 )
 
 func NewFastMetricsRecorder() *FastMetricsRecorder {
@@ -82,65 +92,41 @@ func NewFastMetricsRecorder() *FastMetricsRecorder {
 
 // Helper functions for creating metric updates with different label counts
 
-// validateLabels checks if the provided labels match the expected count for a metric type
+// validateLabels uses the optimized validation from common functions
 func validateLabels(metricType uint8, labels []string) bool {
-	switch metricType {
-	case MetricTypeDNSQuery:
-		return len(labels) >= 2 // Requires: queryType, status (may have additional labels)
-	case MetricTypeError:
-		return len(labels) >= 2 // Requires: errorType, source
-	case MetricTypeUpstreamQuery:
-		return len(labels) >= 2 // Requires: server, status
-	case MetricTypeUpstreamServerReachable:
-		return len(labels) >= 1 // Requires: server
-	case MetricTypeCacheHit, MetricTypeCacheMiss, MetricTypeCacheSize, MetricTypeUpstreamServersTotal:
-		return true // No labels required
-	default:
-		return true // Unknown metric types are allowed (for future extensibility)
-	}
+	return validateLabelsOptimized(metricType, labels)
 }
 
 // NewMetricUpdate creates a metric update with flexible labels
 func NewMetricUpdate(metricType uint8, labels ...string) metricUpdate {
-	return metricUpdate{
-		Type:   metricType,
-		Labels: labels,
-	}
+	return createCounterUpdate(metricType, labels...)
 }
 
 // NewMetricUpdateWithValue creates a metric update with a value and flexible labels
 func NewMetricUpdateWithValue(metricType uint8, value float64, labels ...string) metricUpdate {
-	return metricUpdate{
-		Type:   metricType,
-		Value:  value,
-		Labels: labels,
-	}
+	return createGaugeUpdate(metricType, value, labels...)
 }
 
 // NewMetricUpdateWithDuration creates a metric update with a duration and flexible labels
 func NewMetricUpdateWithDuration(metricType uint8, duration time.Duration, labels ...string) metricUpdate {
-	return metricUpdate{
-		Type:     metricType,
-		Duration: duration,
-		Labels:   labels,
-	}
+	return createHistogramUpdate(metricType, duration, labels...)
 }
 
-// Specific helper functions for common metric patterns to make intent clear
+// Specific helper functions for common metric patterns using optimized functions
 
 // NewDNSQueryUpdate creates a DNS query metric update with required labels
 func NewDNSQueryUpdate(queryType, status string, duration time.Duration) metricUpdate {
-	return NewMetricUpdateWithDuration(MetricTypeDNSQuery, duration, queryType, status)
+	return createCounterHistogramUpdate(MetricTypeDNSQuery, duration, queryType, status)
 }
 
 // NewUpstreamQueryUpdate creates an upstream query metric update with required labels
 func NewUpstreamQueryUpdate(server, status string, duration time.Duration) metricUpdate {
-	return NewMetricUpdateWithDuration(MetricTypeUpstreamQuery, duration, server, status)
+	return createCounterHistogramUpdate(MetricTypeUpstreamQuery, duration, server, status)
 }
 
 // NewErrorUpdate creates an error metric update with required labels
 func NewErrorUpdate(errorType, source string) metricUpdate {
-	return NewMetricUpdate(MetricTypeError, errorType, source)
+	return createCounterUpdate(MetricTypeError, errorType, source)
 }
 
 // NewUpstreamServerReachableUpdate creates an upstream server reachable metric update
@@ -149,17 +135,32 @@ func NewUpstreamServerReachableUpdate(server string, reachable bool) metricUpdat
 	if reachable {
 		value = 1
 	}
-	return NewMetricUpdateWithValue(MetricTypeUpstreamServerReachable, value, server)
+	return createGaugeUpdate(MetricTypeUpstreamServerReachable, value, server)
 }
 
 // NewCacheSizeUpdate creates a cache size metric update
 func NewCacheSizeUpdate(size int) metricUpdate {
-	return NewMetricUpdateWithValue(MetricTypeCacheSize, float64(size))
+	return createGaugeUpdate(MetricTypeCacheSize, float64(size))
 }
 
 // NewUpstreamServersTotalUpdate creates an upstream servers total metric update
 func NewUpstreamServersTotalUpdate(total int) metricUpdate {
-	return NewMetricUpdateWithValue(MetricTypeUpstreamServersTotal, float64(total))
+	return createGaugeUpdate(MetricTypeUpstreamServersTotal, float64(total))
+}
+
+// NewDeviceIPDNSQueryUpdate creates a device IP DNS query metric update
+func NewDeviceIPDNSQueryUpdate(deviceIP string, count uint64) metricUpdate {
+	return createGaugeUpdate(MetricTypeDeviceIPDNSQuery, float64(count), deviceIP)
+}
+
+// NewDomainQueryUpdate creates a domain query metric update
+func NewDomainQueryUpdate(domain, status string) metricUpdate {
+	return createCounterUpdate(MetricTypeDomainQuery, domain, status)
+}
+
+// NewDomainHitUpdate creates a domain hit metric update
+func NewDomainHitUpdate(domain string, hitCount uint64) metricUpdate {
+	return createGaugeUpdate(MetricTypeDomainHit, float64(hitCount), domain)
 }
 
 // ConditionalTimer provides efficient timing that only works when metrics are enabled
@@ -201,9 +202,51 @@ func StartCacheTimer(metricsEnabled bool) ConditionalTimer {
 	return StartConditionalTimer(metricsEnabled)
 }
 
+// incrementDeviceIPCount atomically increments the DNS query count for a specific device IP
+func (f *FastMetricsRecorder) incrementDeviceIPCount(deviceIP string) {
+	atomicIncrement(&f.deviceIPCounts, deviceIP)
+}
+
+// incrementDomainQueryCount atomically increments the DNS query count for a specific domain
+func (f *FastMetricsRecorder) incrementDomainQueryCount(domain string) {
+	atomicIncrement(&f.domainQueryCounts, domain)
+}
+
+// incrementDomainHitCount atomically increments the hit count for a specific domain
+// and returns the new count value
+func (f *FastMetricsRecorder) incrementDomainHitCount(domain string) uint64 {
+	return atomicIncrement(&f.domainHitCounts, domain)
+}
+
 // FastRecordDNSQuery records a DNS query with minimal allocations
 func (f *FastMetricsRecorder) FastRecordDNSQuery(queryType, status string, duration time.Duration) {
+	f.FastRecordDNSQueryWithDeviceIP(queryType, status, "", duration)
+}
+
+// FastRecordDNSQueryWithDeviceIP records a DNS query with device IP tracking
+func (f *FastMetricsRecorder) FastRecordDNSQueryWithDeviceIP(queryType, status, deviceIP string, duration time.Duration) {
+	f.FastRecordDNSQueryWithDeviceIPAndDomain(queryType, status, deviceIP, "", duration)
+}
+
+// FastRecordDNSQueryWithDeviceIPAndDomain records a DNS query with device IP and domain tracking
+func (f *FastMetricsRecorder) FastRecordDNSQueryWithDeviceIPAndDomain(queryType, status, deviceIP, domain string, duration time.Duration) {
 	atomic.AddUint64(&f.dnsQueriesCount, 1)
+
+	// Track device IP specific count if provided
+	if deviceIP != "" {
+		f.incrementDeviceIPCount(deviceIP)
+	}
+
+	// Track domain specific count if provided
+	if domain != "" {
+		f.incrementDomainQueryCount(domain)
+		// Send domain query update
+		select {
+		case f.metricUpdates <- NewDomainQueryUpdate(domain, status):
+		default:
+			// Channel full, skip to avoid blocking DNS responses
+		}
+	}
 
 	// Non-blocking send to batch processor
 	select {
@@ -283,20 +326,6 @@ func (f *FastMetricsRecorder) FastRecordError(errorType, source string) {
 	}
 }
 
-// FastRecordDNSQueryWithExtraLabels demonstrates flexibility with more than 2 labels
-// This could be used for future metrics that need additional dimensions
-func (f *FastMetricsRecorder) FastRecordDNSQueryWithExtraLabels(queryType, status, clientIP, region string, duration time.Duration) {
-	atomic.AddUint64(&f.dnsQueriesCount, 1)
-
-	// Non-blocking send to batch processor with 4 labels
-	// Note: Current Prometheus metrics only use first 2 labels, but this shows flexibility
-	select {
-	case f.metricUpdates <- NewMetricUpdateWithDuration(MetricTypeDNSQuery, duration, queryType, status, clientIP, region):
-	default:
-		// Channel full, skip to avoid blocking DNS responses
-	}
-}
-
 // FastRecordCustomMetric allows recording metrics with arbitrary label combinations
 // This demonstrates the full flexibility of the new design
 func (f *FastMetricsRecorder) FastRecordCustomMetric(metricType uint8, labels ...string) {
@@ -311,6 +340,42 @@ func (f *FastMetricsRecorder) FastRecordCustomMetric(metricType uint8, labels ..
 	}
 }
 
+// FastUpdateDeviceIPMetrics sends device IP DNS query counts to Prometheus
+func (f *FastMetricsRecorder) FastUpdateDeviceIPMetrics() {
+	deviceIPCounts := f.GetAllDeviceIPCounts()
+	for ip, count := range deviceIPCounts {
+		select {
+		case f.metricUpdates <- NewDeviceIPDNSQueryUpdate(ip, count):
+		default:
+			// Channel full, skip to avoid blocking
+		}
+	}
+}
+
+// FastRecordDomainHit records a domain hit
+func (f *FastMetricsRecorder) FastRecordDomainHit(domain string) {
+	newCount := f.incrementDomainHitCount(domain)
+
+	// Send domain hit update to batch processor
+	select {
+	case f.metricUpdates <- NewDomainHitUpdate(domain, newCount):
+	default:
+		// Channel full, skip to avoid blocking
+	}
+}
+
+// FastUpdateDomainMetrics sends domain metrics to Prometheus
+func (f *FastMetricsRecorder) FastUpdateDomainMetrics() {
+	domainHitCounts := f.GetAllDomainHitCounts()
+	for domain, count := range domainHitCounts {
+		select {
+		case f.metricUpdates <- NewDomainHitUpdate(domain, count):
+		default:
+			// Channel full, skip to avoid blocking
+		}
+	}
+}
+
 // processBatchedUpdates processes metric updates in batches to reduce Prometheus contention
 func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay time.Duration) {
 	defer f.wg.Done()
@@ -318,6 +383,10 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 
 	ticker := time.NewTicker(batchDelay)
 	defer ticker.Stop()
+
+	// Device IP metrics update interval (every 10 batch intervals)
+	deviceIPUpdateCounter := 0
+	deviceIPUpdateInterval := 10
 
 	updates := make([]metricUpdate, 0, batchSize) // Pre-allocate slice
 
@@ -340,6 +409,14 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 				f.flushUpdates(updates)
 				updates = updates[:0] // Reset slice but keep capacity
 			}
+
+			// Periodically update device IP and domain metrics
+			deviceIPUpdateCounter++
+			if deviceIPUpdateCounter >= deviceIPUpdateInterval {
+				f.FastUpdateDeviceIPMetrics()
+				f.FastUpdateDomainMetrics()
+				deviceIPUpdateCounter = 0
+			}
 		}
 
 		// If buffer is getting full, flush immediately
@@ -350,49 +427,10 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 	}
 }
 
-// flushUpdates applies batched updates to Prometheus metrics
+// flushUpdates applies batched updates to Prometheus metrics using centralized processing
 func (f *FastMetricsRecorder) flushUpdates(updates []metricUpdate) {
 	for _, update := range updates {
-		switch update.Type {
-		case MetricTypeDNSQuery:
-			// DNS queries require exactly 2 labels: queryType and status
-			if len(update.Labels) >= 2 {
-				// Use only the first 2 labels for Prometheus metrics that expect exactly 2
-				dnsQueriesTotal.WithLabelValues(update.Labels[0], update.Labels[1]).Inc()
-				dnsQueryDuration.WithLabelValues(update.Labels[0], update.Labels[1]).Observe(update.Duration.Seconds())
-			}
-
-		case MetricTypeCacheHit:
-			cacheHitsTotal.Inc()
-
-		case MetricTypeCacheMiss:
-			cacheMissesTotal.Inc()
-
-		case MetricTypeError:
-			// Error metrics require exactly 2 labels: errorType and source
-			if len(update.Labels) >= 2 {
-				errorsTotal.WithLabelValues(update.Labels[0], update.Labels[1]).Inc()
-			}
-
-		case MetricTypeUpstreamQuery:
-			// Upstream queries require exactly 2 labels: server and status
-			if len(update.Labels) >= 2 {
-				upstreamQueriesTotal.WithLabelValues(update.Labels[0], update.Labels[1]).Inc()
-				upstreamQueryDuration.WithLabelValues(update.Labels[0], update.Labels[1]).Observe(update.Duration.Seconds())
-			}
-
-		case MetricTypeCacheSize:
-			cacheSize.Set(update.Value)
-
-		case MetricTypeUpstreamServerReachable:
-			// Upstream server reachable requires exactly 1 label: server
-			if len(update.Labels) >= 1 {
-				upstreamServersReachable.WithLabelValues(update.Labels[0]).Set(update.Value)
-			}
-
-		case MetricTypeUpstreamServersTotal:
-			upstreamServersTotal.Set(update.Value)
-		}
+		processMetricUpdate(update)
 	}
 }
 
@@ -422,6 +460,90 @@ func (f *FastMetricsRecorder) GetStats() (dnsQueries, cacheHits, cacheMisses, er
 		atomic.LoadUint64(&f.cacheHitsCount),
 		atomic.LoadUint64(&f.cacheMissesCount),
 		atomic.LoadUint64(&f.errorsCount)
+}
+
+// GetDeviceIPCount returns the DNS query count for a specific device IP
+func (f *FastMetricsRecorder) GetDeviceIPCount(deviceIP string) uint64 {
+	return atomicGet(&f.deviceIPCounts, deviceIP)
+}
+
+// GetAllDeviceIPCounts returns a map of all device IPs and their DNS query counts
+func (f *FastMetricsRecorder) GetAllDeviceIPCounts() map[string]uint64 {
+	return getAllCounts(&f.deviceIPCounts)
+}
+
+// GetDomainQueryCount returns the DNS query count for a specific domain
+func (f *FastMetricsRecorder) GetDomainQueryCount(domain string) uint64 {
+	return atomicGet(&f.domainQueryCounts, domain)
+}
+
+// GetAllDomainQueryCounts returns a map of all domains and their DNS query counts
+func (f *FastMetricsRecorder) GetAllDomainQueryCounts() map[string]uint64 {
+	return getAllCounts(&f.domainQueryCounts)
+}
+
+// GetDomainHitCount returns the hit count for a specific domain
+func (f *FastMetricsRecorder) GetDomainHitCount(domain string) uint64 {
+	return atomicGet(&f.domainHitCounts, domain)
+}
+
+// GetAllDomainHitCounts returns a map of all domains and their hit counts
+func (f *FastMetricsRecorder) GetAllDomainHitCounts() map[string]uint64 {
+	return getAllCounts(&f.domainHitCounts)
+}
+
+// GetTopDeviceIPs returns the top N device IPs by query count
+func (f *FastMetricsRecorder) GetTopDeviceIPs(n int) []struct {
+	IP    string
+	Count uint64
+} {
+	items := getTopItems(&f.deviceIPCounts, n)
+	result := make([]struct {
+		IP    string
+		Count uint64
+	}, len(items))
+
+	for i, item := range items {
+		result[i].IP = item.Key
+		result[i].Count = item.Count
+	}
+	return result
+}
+
+// GetTopDomainsByQueries returns the top N domains by query count
+func (f *FastMetricsRecorder) GetTopDomainsByQueries(n int) []struct {
+	Domain string
+	Count  uint64
+} {
+	items := getTopItems(&f.domainQueryCounts, n)
+	result := make([]struct {
+		Domain string
+		Count  uint64
+	}, len(items))
+
+	for i, item := range items {
+		result[i].Domain = item.Key
+		result[i].Count = item.Count
+	}
+	return result
+}
+
+// GetTopDomainsByHits returns the top N domains by hit count
+func (f *FastMetricsRecorder) GetTopDomainsByHits(n int) []struct {
+	Domain string
+	Count  uint64
+} {
+	items := getTopItems(&f.domainHitCounts, n)
+	result := make([]struct {
+		Domain string
+		Count  uint64
+	}, len(items))
+
+	for i, item := range items {
+		result[i].Domain = item.Key
+		result[i].Count = item.Count
+	}
+	return result
 }
 
 // drainMetricUpdates drains any remaining updates from the channel during shutdown

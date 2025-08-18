@@ -5,7 +5,6 @@ import (
 	"dnsloadbalancer/util"
 	"net/http"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -100,30 +99,55 @@ var (
 		},
 		[]string{"type", "source"},
 	)
+	// Device IP metrics
+	deviceIPDNSQueries = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dns_device_ip_queries_total",
+			Help: "Total number of DNS queries by device IP",
+		},
+		[]string{"device_ip"},
+	)
+	// Domain metrics
+	domainQueriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dns_domain_queries_total",
+			Help: "Total number of DNS queries by domain",
+		},
+		[]string{"domain", "status"},
+	)
+	domainHitsTotal = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dns_domain_hits_total",
+			Help: "Total number of cache hits by domain",
+		},
+		[]string{"domain"},
+	)
 )
 
 var (
 	metricsUpdateInterval time.Duration
-	// Removed redundant atomic counters - Prometheus metrics already track these
-	// Pre-allocated runtime.MemStats to reduce GC pressure
-	memStatsPool = sync.Pool{
-		New: func() interface{} {
-			return &runtime.MemStats{}
-		},
-	}
 	// Pre-allocated HTTP response strings to avoid allocations
 	healthResponse = []byte("OK")
 	statusResponse = []byte(`{"status":"running","service":"dns-forwarder"}`)
-	// Cache for expensive system metrics to reduce runtime calls
-	lastSystemMetricsUpdate    time.Time
-	systemMetricsCacheDuration = 5 * time.Second // Cache system metrics for 5 seconds
-	cachedGoroutines           int
-	cachedMemoryUsage          uint64
-	systemMetricsMutex         sync.RWMutex
+	// Optimized system metrics cache
+	systemMetricsCache *SystemMetricsCache
 )
 
 func init() {
 	metricsUpdateInterval = util.GetEnvDuration("METRICS_UPDATE_INTERVAL", 30*time.Second)
+
+	// Initialize system metrics cache with optimized functions
+	systemMetricsCache = NewSystemMetricsCache(
+		5*time.Second, // Cache duration
+		func() int { return runtime.NumGoroutine() },
+		func() uint64 {
+			// Use optimized memory stats with pooling
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			return m.Alloc
+		},
+	)
+
 	prometheus.MustRegister(
 		dnsQueriesTotal,
 		dnsQueryDuration,
@@ -138,6 +162,9 @@ func init() {
 		memoryUsage,
 		goroutineCount,
 		errorsTotal,
+		deviceIPDNSQueries,
+		domainQueriesTotal,
+		domainHitsTotal,
 	)
 }
 
@@ -183,6 +210,14 @@ func (m *MetricsRecorder) UpdateCacheSize(size int) {
 
 func (m *MetricsRecorder) RecordError(errorType, source string) {
 	errorsTotal.WithLabelValues(errorType, source).Inc()
+}
+
+func (m *MetricsRecorder) RecordDomainQuery(domain, status string) {
+	domainQueriesTotal.WithLabelValues(domain, status).Inc()
+}
+
+func (m *MetricsRecorder) RecordDomainHit(domain string, hitCount uint64) {
+	domainHitsTotal.WithLabelValues(domain).Set(float64(hitCount))
 }
 
 var MetricsRecorderInstance = NewMetricsRecorder()
@@ -231,61 +266,41 @@ func StartMetricsServer() {
 	}()
 }
 
-// GetGoroutineCount returns the current number of goroutines with caching
+// GetGoroutineCount returns the current number of goroutines using optimized cache
 func GetGoroutineCount() int {
-	systemMetricsMutex.RLock()
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		count := cachedGoroutines
-		systemMetricsMutex.RUnlock()
-		return count
-	}
-	systemMetricsMutex.RUnlock()
-
-	systemMetricsMutex.Lock()
-	// Double-check after acquiring write lock
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		count := cachedGoroutines
-		systemMetricsMutex.Unlock()
-		return count
-	}
-
-	cachedGoroutines = runtime.NumGoroutine()
-	lastSystemMetricsUpdate = time.Now()
-	count := cachedGoroutines
-	systemMetricsMutex.Unlock()
-	return count
+	return systemMetricsCache.GetGoroutineCount()
 }
 
-// GetMemoryUsage returns the current memory usage in bytes with caching and optimized allocation
+// GetMemoryUsage returns the current memory usage in bytes using optimized cache
 func GetMemoryUsage() uint64 {
-	systemMetricsMutex.RLock()
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		usage := cachedMemoryUsage
-		systemMetricsMutex.RUnlock()
-		return usage
-	}
-	systemMetricsMutex.RUnlock()
-
-	systemMetricsMutex.Lock()
-	// Double-check after acquiring write lock
-	if time.Since(lastSystemMetricsUpdate) < systemMetricsCacheDuration {
-		usage := cachedMemoryUsage
-		systemMetricsMutex.Unlock()
-		return usage
-	}
-
-	m := memStatsPool.Get().(*runtime.MemStats)
-	defer memStatsPool.Put(m)
-
-	runtime.ReadMemStats(m)
-	cachedMemoryUsage = m.Alloc
-	lastSystemMetricsUpdate = time.Now()
-	usage := cachedMemoryUsage
-	systemMetricsMutex.Unlock()
-	return usage
+	return systemMetricsCache.GetMemoryUsage()
 }
 
 func updateSystemMetrics() {
 	goroutineCount.Set(float64(GetGoroutineCount()))
 	memoryUsage.Set(float64(GetMemoryUsage()))
+
+	// Update device IP DNS query metrics from FastMetricsRecorder
+	if fastMetricsInstance != nil {
+		deviceIPCounts := fastMetricsInstance.GetAllDeviceIPCounts()
+		UpdateDeviceIPDNSMetrics(deviceIPCounts)
+
+		// Update domain metrics
+		domainHitCounts := fastMetricsInstance.GetAllDomainHitCounts()
+		UpdateDomainHitMetrics(domainHitCounts)
+	}
+}
+
+// UpdateDeviceIPDNSMetrics updates Prometheus metrics for device IP DNS query counts
+func UpdateDeviceIPDNSMetrics(deviceIPCounts map[string]uint64) {
+	for ip, count := range deviceIPCounts {
+		deviceIPDNSQueries.WithLabelValues(ip).Set(float64(count))
+	}
+}
+
+// UpdateDomainHitMetrics updates Prometheus metrics for domain hit counts
+func UpdateDomainHitMetrics(domainHitCounts map[string]uint64) {
+	for domain, count := range domainHitCounts {
+		domainHitsTotal.WithLabelValues(domain).Set(float64(count))
+	}
 }
