@@ -27,11 +27,6 @@ func createGaugeUpdate(metricType uint8, value float64, labels ...string) metric
 	return createMetricUpdate(metricType, value, 0, labels...)
 }
 
-// Single function for all histogram patterns
-func createHistogramUpdate(metricType uint8, duration time.Duration, labels ...string) metricUpdate {
-	return createMetricUpdate(metricType, 0, duration, labels...)
-}
-
 // Combined function for both counter and histogram (common pattern)
 func createCounterHistogramUpdate(metricType uint8, duration time.Duration, labels ...string) metricUpdate {
 	return createMetricUpdate(metricType, 0, duration, labels...)

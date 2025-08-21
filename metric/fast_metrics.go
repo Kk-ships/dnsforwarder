@@ -107,11 +107,6 @@ func NewMetricUpdateWithValue(metricType uint8, value float64, labels ...string)
 	return createGaugeUpdate(metricType, value, labels...)
 }
 
-// NewMetricUpdateWithDuration creates a metric update with a duration and flexible labels
-func NewMetricUpdateWithDuration(metricType uint8, duration time.Duration, labels ...string) metricUpdate {
-	return createHistogramUpdate(metricType, duration, labels...)
-}
-
 // Specific helper functions for common metric patterns using optimized functions
 
 // NewDNSQueryUpdate creates a DNS query metric update with required labels

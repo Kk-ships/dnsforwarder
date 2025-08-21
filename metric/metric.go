@@ -168,60 +168,6 @@ func init() {
 	)
 }
 
-type MetricsRecorder struct{}
-
-func NewMetricsRecorder() *MetricsRecorder {
-	return &MetricsRecorder{}
-}
-
-func (m *MetricsRecorder) RecordDNSQuery(queryType, status string, duration time.Duration) {
-	dnsQueriesTotal.WithLabelValues(queryType, status).Inc()
-	dnsQueryDuration.WithLabelValues(queryType, status).Observe(duration.Seconds())
-}
-
-func (m *MetricsRecorder) RecordCacheHit() {
-	cacheHitsTotal.Inc()
-}
-
-func (m *MetricsRecorder) RecordCacheMiss() {
-	cacheMissesTotal.Inc()
-}
-
-func (m *MetricsRecorder) RecordUpstreamQuery(server, status string, duration time.Duration) {
-	upstreamQueriesTotal.WithLabelValues(server, status).Inc()
-	upstreamQueryDuration.WithLabelValues(server, status).Observe(duration.Seconds())
-}
-
-func (m *MetricsRecorder) SetUpstreamServerReachable(server string, reachable bool) {
-	value := float64(0)
-	if reachable {
-		value = 1
-	}
-	upstreamServersReachable.WithLabelValues(server).Set(value)
-}
-
-func (m *MetricsRecorder) SetUpstreamServersTotal(total int) {
-	upstreamServersTotal.Set(float64(total))
-}
-
-func (m *MetricsRecorder) UpdateCacheSize(size int) {
-	cacheSize.Set(float64(size))
-}
-
-func (m *MetricsRecorder) RecordError(errorType, source string) {
-	errorsTotal.WithLabelValues(errorType, source).Inc()
-}
-
-func (m *MetricsRecorder) RecordDomainQuery(domain, status string) {
-	domainQueriesTotal.WithLabelValues(domain, status).Inc()
-}
-
-func (m *MetricsRecorder) RecordDomainHit(domain string, hitCount uint64) {
-	domainHitsTotal.WithLabelValues(domain).Set(float64(hitCount))
-}
-
-var MetricsRecorderInstance = NewMetricsRecorder()
-
 func StartMetricsUpdater() {
 	startTime := time.Now()
 	go func() {
