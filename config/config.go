@@ -62,6 +62,34 @@ type Config struct {
 	CachePersistenceFile     string
 	CachePersistenceInterval time.Duration
 	CachePersistenceMaxAge   time.Duration
+
+	// Rate Limiting Configuration
+	EnableRateLimit bool
+	// Basic rate limiting - default to generous limits
+	MaxRequestsPerSecond int
+	MaxRequestsPerMinute int
+	MaxRequestsPerHour   int
+	WindowSize           time.Duration
+	WindowSlots          int
+
+	// Burst detection
+	BurstThreshold     int
+	BurstWindow        time.Duration
+	MaxBurstsPerMinute int
+
+	// Adaptive throttling
+	AdaptiveEnabled    bool
+	SuspicionThreshold int
+	ThrottleMultiplier float64
+
+	// Blocking
+	BlockingEnabled bool
+	BlockDuration   time.Duration
+	BlockThreshold  int
+
+	// Cleanup
+	CleanupInterval time.Duration
+	ClientTimeout   time.Duration
 }
 
 var (
@@ -121,6 +149,34 @@ func loadConfig() *Config {
 		CachePersistenceFile:     util.GetEnvString("CACHE_PERSISTENCE_FILE", "/app/cache/dns_cache.json"),
 		CachePersistenceInterval: util.GetEnvDuration("CACHE_PERSISTENCE_INTERVAL", 5*time.Minute),
 		CachePersistenceMaxAge:   util.GetEnvDuration("CACHE_PERSISTENCE_MAX_AGE", 1*time.Hour),
+
+		// Rate Limiting Configuration
+		EnableRateLimit: util.GetEnvBool("ENABLE_RATE_LIMIT", false),
+		// Basic rate limiting - default to generous limits
+		MaxRequestsPerSecond: util.GetEnvInt("RATE_LIMIT_QPS", 100),
+		MaxRequestsPerMinute: util.GetEnvInt("RATE_LIMIT_QPM", 3000),
+		MaxRequestsPerHour:   util.GetEnvInt("RATE_LIMIT_QPH", 50000),
+		WindowSize:           util.GetEnvDuration("RATE_LIMIT_WINDOW_SIZE", time.Minute),
+		WindowSlots:          util.GetEnvInt("RATE_LIMIT_WINDOW_SLOTS", 60),
+
+		// Burst detection
+		BurstThreshold:     util.GetEnvInt("RATE_LIMIT_BURST_THRESHOLD", 200),
+		BurstWindow:        util.GetEnvDuration("RATE_LIMIT_BURST_WINDOW", time.Second*5),
+		MaxBurstsPerMinute: util.GetEnvInt("RATE_LIMIT_MAX_BURSTS_PER_MIN", 5),
+
+		// Adaptive throttling
+		AdaptiveEnabled:    util.GetEnvBool("RATE_LIMIT_ADAPTIVE_ENABLED", true),
+		SuspicionThreshold: util.GetEnvInt("RATE_LIMIT_SUSPICION_THRESHOLD", 30),
+		ThrottleMultiplier: util.GetEnvFloat64("RATE_LIMIT_THROTTLE_MULTIPLIER", 0.5),
+
+		// Blocking
+		BlockingEnabled: util.GetEnvBool("RATE_LIMIT_BLOCKING_ENABLED", true),
+		BlockDuration:   util.GetEnvDuration("RATE_LIMIT_BLOCK_DURATION", time.Minute*5),
+		BlockThreshold:  util.GetEnvInt("RATE_LIMIT_BLOCK_THRESHOLD", 80),
+
+		// Cleanup
+		CleanupInterval: util.GetEnvDuration("RATE_LIMIT_CLEANUP_INTERVAL", time.Minute*5),
+		ClientTimeout:   util.GetEnvDuration("RATE_LIMIT_CLIENT_TIMEOUT", time.Minute*30),
 	}
 
 	return c

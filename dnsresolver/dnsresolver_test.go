@@ -88,7 +88,7 @@ func TestDNSMsgPooling(t *testing.T) {
 	}
 
 	// Return to pool
-	dnsMsgPool.Put(msg)
+	DnsMsgPool.Put(msg)
 }
 
 func BenchmarkIncrementServerUsage(b *testing.B) {
@@ -120,7 +120,7 @@ func BenchmarkDNSMsgPooling(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			msg := prepareDNSQuery(domain, qtype)
-			dnsMsgPool.Put(msg)
+			DnsMsgPool.Put(msg)
 		}
 	})
 }

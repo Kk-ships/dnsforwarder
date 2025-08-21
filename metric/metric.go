@@ -122,6 +122,28 @@ var (
 		},
 		[]string{"domain"},
 	)
+	// Rate limiting metrics
+	rateLimitBlockedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dns_rate_limit_blocked_total",
+			Help: "Total number of requests blocked by rate limiting",
+		},
+		[]string{"client_ip", "reason"},
+	)
+	rateLimitAllowedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "dns_rate_limit_allowed_total",
+			Help: "Total number of requests allowed by rate limiter",
+		},
+		[]string{"client_ip"},
+	)
+	rateLimitSuspiciousClients = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "dns_rate_limit_suspicious_clients",
+			Help: "Number of clients flagged as suspicious by rate limiter",
+		},
+		[]string{"client_ip"},
+	)
 )
 
 var (
@@ -165,6 +187,9 @@ func init() {
 		deviceIPDNSQueries,
 		domainQueriesTotal,
 		domainHitsTotal,
+		rateLimitBlockedTotal,
+		rateLimitAllowedTotal,
+		rateLimitSuspiciousClients,
 	)
 }
 
@@ -200,6 +225,7 @@ func StartMetricsServer() {
 			logutil.Logger.Errorf("Failed to write status response: %v", err)
 		}
 	})
+
 	server := &http.Server{
 		Addr:    metricsPort,
 		Handler: mux,

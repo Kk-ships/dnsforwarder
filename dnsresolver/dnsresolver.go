@@ -18,7 +18,7 @@ import (
 var (
 	dnsUsageStats = make(map[string]*int64) // Changed to atomic counters
 	statsMutex    sync.RWMutex              // Use RWMutex for better read performance
-	dnsMsgPool    = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
+	DnsMsgPool    = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
 	dnsClientPool = sync.Pool{New: func() interface{} {
 		return &dns.Client{
 			Timeout: config.Get().DNSTimeout,
@@ -47,14 +47,14 @@ func UpdateDNSServersCache() {
 				cfg.PrivateServers,
 				cfg.PublicServers,
 				dnsClient,
-				&dnsMsgPool,
+				&DnsMsgPool,
 			)
 		}
 	}()
 }
 
 func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
-	m := dnsMsgPool.Get().(*dns.Msg)
+	m := DnsMsgPool.Get().(*dns.Msg)
 	// Reset the message to ensure clean state
 	*m = dns.Msg{}
 	m.SetQuestion(dns.Fqdn(domain), qtype)
@@ -64,7 +64,7 @@ func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
 
 func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQuery(domain, qtype)
-	defer dnsMsgPool.Put(m)
+	defer DnsMsgPool.Put(m)
 	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
 	result := upstreamDNSQuery(privateServers, publicServers, m)
 	return result
@@ -72,7 +72,7 @@ func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 
 func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQuery(domain, qtype)
-	defer dnsMsgPool.Put(m)
+	defer DnsMsgPool.Put(m)
 	if svr, ok := domainrouting.GetRoutingTable()[domain]; ok {
 		result := upstreamDNSQuery([]string{svr}, []string{}, m)
 		return result

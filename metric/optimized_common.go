@@ -32,24 +32,27 @@ func createCounterHistogramUpdate(metricType uint8, duration time.Duration, labe
 	return createMetricUpdate(metricType, 0, duration, labels...)
 }
 
-// Metric label requirements - centralized configuration
-var metricLabelRequirements = map[uint8]int{
-	MetricTypeDNSQuery:                2, // queryType, status
-	MetricTypeError:                   2, // errorType, source
-	MetricTypeUpstreamQuery:           2, // server, status
-	MetricTypeUpstreamServerReachable: 1, // server
-	MetricTypeDeviceIPDNSQuery:        1, // device_ip
-	MetricTypeDomainQuery:             2, // domain, status
-	MetricTypeDomainHit:               1, // domain
-	MetricTypeCacheHit:                0, // no labels
-	MetricTypeCacheMiss:               0, // no labels
-	MetricTypeCacheSize:               0, // no labels
-	MetricTypeUpstreamServersTotal:    0, // no labels
+// Lookup table for expected label counts per metric type
+var expectedLabelCounts = map[uint8]int{
+	MetricTypeDNSQuery:                  2, // query_type, status
+	MetricTypeUpstreamQuery:             2, // server, status
+	MetricTypeError:                     2, // error_type, source
+	MetricTypeUpstreamServerReachable:   1, // server
+	MetricTypeDeviceIPDNSQuery:          1, // device_ip
+	MetricTypeDomainQuery:               2, // domain, status
+	MetricTypeDomainHit:                 1, // domain
+	MetricTypeCacheHit:                  0, // no labels
+	MetricTypeCacheMiss:                 0, // no labels
+	MetricTypeCacheSize:                 0, // no labels
+	MetricTypeUpstreamServersTotal:      0, // no labels
+	MetricTypeRateLimitBlocked:          2, // client_ip, reason
+	MetricTypeRateLimitAllowed:          1, // client_ip
+	MetricTypeRateLimitSuspiciousClient: 2, // client_ip, suspicion_level
 }
 
 // Optimized validation using lookup table
 func validateLabelsOptimized(metricType uint8, labels []string) bool {
-	if required, exists := metricLabelRequirements[metricType]; exists {
+	if required, exists := expectedLabelCounts[metricType]; exists {
 		return len(labels) >= required
 	}
 	return true // Unknown metric types are allowed for extensibility
@@ -237,6 +240,18 @@ func processMetricUpdate(update metricUpdate) {
 	case MetricTypeDomainHit:
 		if len(update.Labels) >= 1 {
 			domainHitsTotal.WithLabelValues(update.Labels[0]).Set(update.Value)
+		}
+	case MetricTypeRateLimitBlocked:
+		if len(update.Labels) >= 2 {
+			rateLimitBlockedTotal.WithLabelValues(update.Labels[0], update.Labels[1]).Inc()
+		}
+	case MetricTypeRateLimitAllowed:
+		if len(update.Labels) >= 1 {
+			rateLimitAllowedTotal.WithLabelValues(update.Labels[0]).Inc()
+		}
+	case MetricTypeRateLimitSuspiciousClient:
+		if len(update.Labels) >= 2 {
+			rateLimitSuspiciousClients.WithLabelValues(update.Labels[0]).Set(update.Value)
 		}
 	}
 }

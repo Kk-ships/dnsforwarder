@@ -18,6 +18,8 @@ var (
 	envIntCache      sync.Map // map[string]int
 	envStringCache   sync.Map // map[string]string
 
+	envFloat64Cache sync.Map // map[string]float64
+
 	// Object pools to reduce allocations
 	stringBuilderPool = sync.Pool{
 		New: func() interface{} {
@@ -128,6 +130,20 @@ func GetEnvBool(key string, def bool) bool {
 		}
 	}
 	envStringCache.Store(key, strconv.FormatBool(val))
+	return val
+}
+
+func GetEnvFloat64(key string, def float64) float64 {
+	if v, ok := envFloat64Cache.Load(key); ok {
+		return v.(float64)
+	}
+	val := def
+	if s := os.Getenv(key); s != "" {
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			val = f
+		}
+	}
+	envFloat64Cache.Store(key, val)
 	return val
 }
 

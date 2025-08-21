@@ -4,10 +4,12 @@
 A high-performance, cache-enabled DNS forwarder written in Go. This project forwards DNS queries to upstream servers, caches responses for improved performance, and provides detailed logging, statistics, and flexible routing features.
 
 ## What's New
+- **Rate Limiting Protection:** Comprehensive protection against DNS abuse with per-client limits, adaptive throttling, burst detection, and automatic blocking of suspicious clients.
+- **Enhanced Metrics & Monitoring:** Rate limiting metrics integrated into Prometheus with dedicated Grafana dashboard panels for monitoring attacks and suspicious behavior.
 - **Cache Persistence (Hot Start):** DNS cache is now persisted to disk and automatically restored on container restarts, providing faster response times after restarts. Cache for hot restart is valid for 1 hour only.
 - **Folder-based Domain Routing:** Load domain routing rules from all `.txt` files in a specified folder, making management and updates easier.
 - **Hot-Reload Domain Routing Table:** Automatically refresh domain routing rules at a configurable interval without restarting the service.
-- **Enhanced Configuration:** All major parameters (DNS servers, cache TTL, ports, metrics, routing folders, reload intervals, etc.) are configurable via environment variables or a `.env` file.
+- **Enhanced Configuration:** All major parameters (DNS servers, cache TTL, ports, metrics, routing folders, reload intervals, rate limiting, etc.) are configurable via environment variables or a `.env` file.
 - **Improved Docker Support:** Easily mount domain routing folders as read-only volumes for secure and dynamic configuration in containers.
 
 
@@ -18,10 +20,11 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 - **Hot-Reload Routing Table:** Automatically refresh domain routing rules at a configurable interval.
 - **Caching:** Uses an in-memory cache to store DNS responses, reducing latency and upstream load.
 - **Cache Persistence:** Automatically saves and restores cache to/from disk for hot starts after container restarts.
+- **Rate Limiting:** Comprehensive protection against DNS abuse with per-client limits, adaptive throttling, and suspicious behavior detection.
 - **Health Checks:** Periodically checks upstream DNS server reachability and only uses healthy servers.
 - **Statistics:** Logs DNS usage and cache hit/miss rates.
-- **Prometheus Metrics:** Comprehensive metrics collection for monitoring and alerting.
-- **Configurable:** All major parameters (DNS servers, cache TTL, ports, metrics, routing folders, reload intervals, etc.) are configurable via environment variables or a `.env` file.
+- **Prometheus Metrics:** Comprehensive metrics collection for monitoring and alerting, including rate limiting metrics.
+- **Configurable:** All major parameters (DNS servers, cache TTL, ports, metrics, routing folders, reload intervals, rate limiting, etc.) are configurable via environment variables or a `.env` file.
 - **Docker Support:** Lightweight, production-ready Docker image with secure, dynamic configuration via folder mounts.
 
 ## Usage
@@ -105,6 +108,25 @@ CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
 CACHE_PERSISTENCE_INTERVAL=5m
 CACHE_PERSISTENCE_MAX_AGE=1h
 
+# Rate Limiting Configuration (Optional)
+ENABLE_RATE_LIMIT=true
+RATE_LIMIT_MAX_QPS=100
+RATE_LIMIT_MAX_QPM=3000
+RATE_LIMIT_MAX_QPH=50000
+RATE_LIMIT_WINDOW_SIZE=1m
+RATE_LIMIT_WINDOW_SLOTS=60
+RATE_LIMIT_BURST_THRESHOLD=200
+RATE_LIMIT_BURST_WINDOW=5s
+RATE_LIMIT_MAX_BURSTS_PER_MINUTE=5
+RATE_LIMIT_ADAPTIVE_ENABLED=true
+RATE_LIMIT_SUSPICION_THRESHOLD=30
+RATE_LIMIT_THROTTLE_MULTIPLIER=0.5
+RATE_LIMIT_BLOCKING_ENABLED=true
+RATE_LIMIT_BLOCK_DURATION=5m
+RATE_LIMIT_BLOCK_THRESHOLD=80
+RATE_LIMIT_CLEANUP_INTERVAL=5m
+RATE_LIMIT_CLIENT_TIMEOUT=30m
+
 # Logger Configuration
 LOG_LEVEL=info
 ```
@@ -144,6 +166,25 @@ LOG_LEVEL=info
 - **CACHE_PERSISTENCE_FILE:** Path to the cache persistence file (default `/app/cache/dns_cache.json`).
 - **CACHE_PERSISTENCE_INTERVAL:** How often to save cache to disk (default `5m`).
 - **CACHE_PERSISTENCE_MAX_AGE:** Maximum age of cache file before it's considered stale and ignored (default `1h`).
+
+#### Rate Limiting Configuration
+- **ENABLE_RATE_LIMIT:** Enable rate limiting protection (default `false`).
+- **RATE_LIMIT_MAX_QPS:** Maximum queries per second per client (default `100`).
+- **RATE_LIMIT_MAX_QPM:** Maximum queries per minute per client (default `3000`).
+- **RATE_LIMIT_MAX_QPH:** Maximum queries per hour per client (default `50000`).
+- **RATE_LIMIT_WINDOW_SIZE:** Size of sliding window for rate calculations (default `1m`).
+- **RATE_LIMIT_WINDOW_SLOTS:** Number of slots in sliding window (default `60`).
+- **RATE_LIMIT_BURST_THRESHOLD:** Requests per second to trigger burst detection (default `200`).
+- **RATE_LIMIT_BURST_WINDOW:** Time window for burst detection (default `5s`).
+- **RATE_LIMIT_MAX_BURSTS_PER_MINUTE:** Maximum allowed bursts per minute (default `5`).
+- **RATE_LIMIT_ADAPTIVE_ENABLED:** Enable adaptive throttling based on suspicion levels (default `true`).
+- **RATE_LIMIT_SUSPICION_THRESHOLD:** Suspicion level to trigger throttling (default `30`).
+- **RATE_LIMIT_THROTTLE_MULTIPLIER:** Rate reduction multiplier when throttling (default `0.5`).
+- **RATE_LIMIT_BLOCKING_ENABLED:** Enable automatic blocking of suspicious clients (default `true`).
+- **RATE_LIMIT_BLOCK_DURATION:** How long to block suspicious clients (default `5m`).
+- **RATE_LIMIT_BLOCK_THRESHOLD:** Suspicion level to trigger blocking (default `80`).
+- **RATE_LIMIT_CLEANUP_INTERVAL:** How often to cleanup old client entries (default `5m`).
+- **RATE_LIMIT_CLIENT_TIMEOUT:** How long to keep inactive client data (default `30m`).
 
 ### 5. Client-Based DNS Routing
 
@@ -258,6 +299,75 @@ address=/internal.corp/10.10.1.1
 - Make sure the file paths in `DOMAIN_ROUTING_FOLDER` are correct and accessible by the DNS forwarder.
 - Ensure each rule is in the correct format and not commented out.
 
+## Rate Limiting
+
+The DNS forwarder includes comprehensive rate limiting protection to defend against DNS abuse, DDoS attacks, and suspicious behavior. It provides per-client rate limits, adaptive throttling, and automatic blocking of malicious clients.
+
+### How It Works
+
+1. **Per-Client Tracking:** Each client is tracked separately with sliding window counters
+2. **Multi-Level Limits:** Enforces QPS (queries per second), QPM (queries per minute), and QPH (queries per hour) limits
+3. **Burst Detection:** Identifies unusual traffic spikes and patterns
+4. **Suspicion Scoring:** Builds a suspicion score (0-100) based on behavior patterns
+5. **Adaptive Throttling:** Reduces rate limits for suspicious clients
+6. **Automatic Blocking:** Temporarily blocks clients exceeding suspicion thresholds
+
+### Configuration Example
+
+```bash
+ENABLE_RATE_LIMIT=true
+RATE_LIMIT_MAX_QPS=100              # 100 queries per second per client
+RATE_LIMIT_MAX_QPM=3000             # 3000 queries per minute per client
+RATE_LIMIT_MAX_QPH=50000            # 50000 queries per hour per client
+RATE_LIMIT_BURST_THRESHOLD=200      # Burst detection at >200 QPS
+RATE_LIMIT_SUSPICION_THRESHOLD=30   # Start throttling at suspicion level 30
+RATE_LIMIT_BLOCK_THRESHOLD=80       # Block clients at suspicion level 80
+RATE_LIMIT_BLOCK_DURATION=5m        # Block for 5 minutes
+```
+
+### Behavior Examples
+
+**Normal Client:**
+- Stays within limits → **Suspicion: 0** → **Full speed allowed**
+
+**Busy Client:**
+- Approaches limits → **Suspicion: 10-29** → **Full speed allowed**
+- Exceeds QPS briefly → **Suspicion: 30+** → **Throttled to 50% speed**
+
+**Suspicious Client:**
+- Repeated bursts → **Suspicion: 80+** → **Blocked for 5 minutes**
+- After timeout → **Automatic unblock** → **Suspicion reset**
+
+**Malicious Client:**
+- Persistent abuse → **Repeated blocking** → **Logged and monitored**
+
+### Monitoring & Metrics
+
+Rate limiting activity is fully monitored via Prometheus metrics:
+- **Blocked/Allowed requests** per client and reason
+- **Suspicion levels** for flagged clients
+- **Block rates** and patterns over time
+- **Top offenders** and attack analysis
+
+The included Grafana dashboard provides visual monitoring of all rate limiting activity.
+
+### Benefits
+
+- **DDoS Protection:** Automatic mitigation of DNS-based attacks
+- **Resource Protection:** Prevents upstream server overload
+- **Fair Usage:** Ensures service availability for all clients
+- **Behavioral Analysis:** Identifies and blocks suspicious patterns
+- **Zero Configuration:** Works out-of-the-box with sensible defaults
+- **Adaptive:** Automatically adjusts protection levels based on threats
+
+### Use Cases
+
+- **Public DNS Servers:** Protect against abuse and attacks
+- **Corporate Networks:** Ensure fair DNS resource usage
+- **Home Networks:** Block malware DNS queries
+- **Pi-hole Protection:** Prevent DNS amplification attacks
+- **ISP DNS:** Large-scale protection with client tracking
+
 #### Cache Persistence Issues
 If you see "permission denied" errors for cache persistence:
 1. **Docker/Container**: Ensure the cache directory is properly mounted and writable:
@@ -310,6 +420,11 @@ When `ENABLE_METRICS=true`, the following metrics are available at `/metrics` en
 - `dns_device_ip_queries_total` - Total DNS queries per device IP
 - `dns_domain_queries_total` - Total DNS queries per domain (by domain and status)
 - `dns_domain_hits_total` - Total hits per domain
+
+#### Rate Limiting Metrics
+- `dns_rate_limit_blocked_total` - Total requests blocked by rate limiting (by client IP and reason)
+- `dns_rate_limit_allowed_total` - Total requests allowed by rate limiter (by client IP)
+- `dns_rate_limit_suspicious_clients` - Number of clients flagged as suspicious (by client IP with suspicion level)
 
 #### Health Check Endpoints
 - `/health` - Simple health check (returns "OK")

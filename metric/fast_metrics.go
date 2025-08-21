@@ -59,6 +59,9 @@ const (
 	MetricTypeDeviceIPDNSQuery
 	MetricTypeDomainQuery
 	MetricTypeDomainHit
+	MetricTypeRateLimitBlocked
+	MetricTypeRateLimitAllowed
+	MetricTypeRateLimitSuspiciousClient
 )
 
 func NewFastMetricsRecorder() *FastMetricsRecorder {
@@ -368,6 +371,33 @@ func (f *FastMetricsRecorder) FastUpdateDomainMetrics() {
 		default:
 			// Channel full, skip to avoid blocking
 		}
+	}
+}
+
+// FastRecordRateLimitBlocked records a blocked request due to rate limiting
+func (f *FastMetricsRecorder) FastRecordRateLimitBlocked(clientIP, reason string) {
+	select {
+	case f.metricUpdates <- NewMetricUpdate(MetricTypeRateLimitBlocked, clientIP, reason):
+	default:
+		// Channel full, skip to avoid blocking
+	}
+}
+
+// FastRecordRateLimitAllowed records an allowed request by rate limiter
+func (f *FastMetricsRecorder) FastRecordRateLimitAllowed(clientIP string) {
+	select {
+	case f.metricUpdates <- NewMetricUpdate(MetricTypeRateLimitAllowed, clientIP):
+	default:
+		// Channel full, skip to avoid blocking
+	}
+}
+
+// FastSetRateLimitSuspiciousClient sets the suspicion level for a client
+func (f *FastMetricsRecorder) FastSetRateLimitSuspiciousClient(clientIP string, suspicionLevel float64) {
+	select {
+	case f.metricUpdates <- NewMetricUpdateWithValue(MetricTypeRateLimitSuspiciousClient, suspicionLevel, clientIP):
+	default:
+		// Channel full, skip to avoid blocking
 	}
 }
 
