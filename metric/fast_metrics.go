@@ -153,6 +153,21 @@ func NewDomainHitUpdate(domain string, hitCount uint64) metricUpdate {
 	return createGaugeUpdate(MetricTypeDomainHit, float64(hitCount), domain)
 }
 
+// NewRateLimitBlockedUpdate creates a rate limit blocked metric update
+func NewRateLimitBlockedUpdate(clientIP, reason string) metricUpdate {
+	return createCounterUpdate(MetricTypeRateLimitBlocked, clientIP, reason)
+}
+
+// NewRateLimitAllowedUpdate creates a rate limit allowed metric update
+func NewRateLimitAllowedUpdate(clientIP string) metricUpdate {
+	return createCounterUpdate(MetricTypeRateLimitAllowed, clientIP)
+}
+
+// NewRateLimitSuspiciousClientUpdate creates a suspicious client metric update
+func NewRateLimitSuspiciousClientUpdate(clientIP string, suspicionLevel int32) metricUpdate {
+	return createGaugeUpdate(MetricTypeRateLimitSuspiciousClient, float64(suspicionLevel), clientIP)
+}
+
 // ConditionalTimer provides efficient timing that only works when metrics are enabled
 type ConditionalTimer struct {
 	start   time.Time
@@ -313,6 +328,33 @@ func (f *FastMetricsRecorder) FastRecordError(errorType, source string) {
 	select {
 	case f.metricUpdates <- NewErrorUpdate(errorType, source):
 	default:
+	}
+}
+
+// FastRecordRateLimitBlocked records a rate limit blocked event
+func (f *FastMetricsRecorder) FastRecordRateLimitBlocked(clientIP, reason string) {
+	select {
+	case f.metricUpdates <- NewRateLimitBlockedUpdate(clientIP, reason):
+	default:
+		// Channel full, skip to avoid blocking DNS responses
+	}
+}
+
+// FastRecordRateLimitAllowed records a rate limit allowed event
+func (f *FastMetricsRecorder) FastRecordRateLimitAllowed(clientIP string) {
+	select {
+	case f.metricUpdates <- NewRateLimitAllowedUpdate(clientIP):
+	default:
+		// Channel full, skip to avoid blocking DNS responses
+	}
+}
+
+// FastRecordRateLimitSuspiciousClient records a suspicious client metric
+func (f *FastMetricsRecorder) FastRecordRateLimitSuspiciousClient(clientIP string, suspicionLevel int32) {
+	select {
+	case f.metricUpdates <- NewRateLimitSuspiciousClientUpdate(clientIP, suspicionLevel):
+	default:
+		// Channel full, skip to avoid blocking DNS responses
 	}
 }
 

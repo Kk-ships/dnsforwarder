@@ -163,6 +163,7 @@ func (rl *RateLimiter) CheckRateLimit(clientIP string) *RateLimitResult {
 		atomic.AddUint64(&rl.blockedRequests, 1)
 		if rl.metrics != nil {
 			rl.metrics.FastRecordError("rate_limit_blocked", "client_blocked")
+			rl.metrics.FastRecordRateLimitBlocked("[masked]", bucket.blockReason)
 		}
 
 		return &RateLimitResult{
@@ -188,6 +189,7 @@ func (rl *RateLimiter) CheckRateLimit(clientIP string) *RateLimitResult {
 		atomic.AddUint64(&rl.blockedRequests, 1)
 		if rl.metrics != nil {
 			rl.metrics.FastRecordError("rate_limit_blocked", "client_blocked")
+			rl.metrics.FastRecordRateLimitBlocked("[masked]", "suspicious_behavior")
 		}
 
 		return &RateLimitResult{
@@ -208,6 +210,7 @@ func (rl *RateLimiter) CheckRateLimit(clientIP string) *RateLimitResult {
 
 		if rl.metrics != nil {
 			rl.metrics.FastRecordError("rate_limit_exceeded", "qps_limit")
+			rl.metrics.FastRecordRateLimitBlocked("[masked]", "QPS limit exceeded")
 		}
 
 		return &RateLimitResult{
@@ -225,6 +228,11 @@ func (rl *RateLimiter) CheckRateLimit(clientIP string) *RateLimitResult {
 	bucket.totalRequests++
 
 	atomic.AddUint64(&rl.allowedRequests, 1)
+
+	// Record allowed request metric
+	if rl.metrics != nil {
+		rl.metrics.FastRecordRateLimitAllowed("[masked]")
+	}
 
 	// Check for burst detection after incrementing
 	rl.detectBurst(bucket, now)
@@ -329,6 +337,10 @@ func (rl *RateLimiter) increaseSuspicion(bucket *ClientBucket, reason string) {
 
 	if rl.metrics != nil {
 		rl.metrics.FastRecordError("suspicion_increased", reason)
+		// Record suspicious client metric if suspicion level is significant
+		if newLevel >= int32(rl.config.SuspicionThreshold) { // Report clients suspicious
+			rl.metrics.FastRecordRateLimitSuspiciousClient("[masked]", newLevel)
+		}
 	}
 
 	logutil.Logger.Debugf("Suspicion level increased for client: %d -> %d (reason: %s)",
@@ -342,6 +354,8 @@ func (rl *RateLimiter) blockClient(bucket *ClientBucket, now time.Time, reason s
 
 	if rl.metrics != nil {
 		rl.metrics.FastRecordError("client_blocked", reason)
+		// Record the blocked client metric
+		rl.metrics.FastRecordRateLimitBlocked("[masked]", reason)
 	}
 
 	logutil.Logger.Warnf("Client blocked for %v due to: %s",

@@ -10,6 +10,7 @@ import (
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/metric"
+	"dnsloadbalancer/ratelimit"
 	"dnsloadbalancer/util"
 	"os"
 	"os/signal"
@@ -30,7 +31,47 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	logutil.Logger.Debug("ServeDNS: start")
 	defer logutil.Logger.Debug("ServeDNS: end")
 
-	msg := new(dns.Msg)
+	// Rate limiting check
+	if cfg.EnableRateLimit {
+		clientIP := util.GetClientIP(w)
+		if rateLimiter := ratelimit.GetGlobalRateLimiter(); rateLimiter != nil {
+			result := rateLimiter.CheckRateLimit(clientIP)
+			if !result.Allowed {
+				// Return SERVFAIL for rate limited requests
+				msg := dnsresolver.DnsMsgPool.Get().(*dns.Msg)
+				defer dnsresolver.DnsMsgPool.Put(msg)
+				msg.SetRcode(r, dns.RcodeRefused) // Return REFUSED for rate limited requests
+				msg.Authoritative = false
+
+				// Record proper rate limiting metrics
+				if cfg.EnableMetrics {
+					duration := timer.Elapsed()
+					// Record the blocked request with client IP and reason
+					metric.GetFastMetricsInstance().FastRecordRateLimitBlocked(clientIP, result.Reason)
+					// Also record it as a DNS query with rate_limited status
+					metric.GetFastMetricsInstance().FastRecordDNSQueryWithDeviceIPAndDomain("rate_limited", "blocked", clientIP, "", duration)
+				}
+
+				logutil.Logger.Debugf("Rate limited request from %s: %s (retry after: %v)", clientIP, result.Reason, result.RetryAfter)
+				if err := w.WriteMsg(msg); err != nil {
+					if cfg.EnableMetrics {
+						// Record write failure as a separate metric
+						metric.GetFastMetricsInstance().FastRecordError("dns_response_write_failed", "dns_handler")
+					}
+					logutil.Logger.Errorf("Failed to write DNS response: %v", err)
+				}
+				return
+			} else {
+				// Record successful rate limit check
+				if cfg.EnableMetrics {
+					metric.GetFastMetricsInstance().FastRecordRateLimitAllowed(clientIP)
+				}
+			}
+		}
+	}
+
+	msg := dnsresolver.DnsMsgPool.Get().(*dns.Msg)
+	defer dnsresolver.DnsMsgPool.Put(msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
 
@@ -90,6 +131,11 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: domain routing initialized")
 	clientrouting.InitializeClientRouting()
 	logutil.Logger.Debug("StartDNSServer: client routing initialized")
+	// Initialize rate limiter
+	ratelimit.InitializeGlobalRateLimiter(cfg.EnableRateLimit)
+	if cfg.EnableRateLimit {
+		logutil.Logger.Debug("StartDNSServer: rate limiter initialized")
+	}
 	// Start cache stats and metrics logging in background
 	cache.StartCacheStatsLogger()
 	if cfg.EnableMetrics {
@@ -123,6 +169,12 @@ func StartDNSServer() {
 
 		// Stop cache persistence and save final state
 		cache.StopCachePersistence()
+
+		// Shutdown rate limiter
+		if cfg.EnableRateLimit {
+			logutil.Logger.Debug("Shutting down rate limiter...")
+			ratelimit.ShutdownGlobalRateLimiter()
+		}
 
 		// Shutdown metrics recording gracefully
 		if cfg.EnableMetrics {
