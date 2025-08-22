@@ -205,11 +205,6 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		return answers
 	}
 
-	// Cache miss path
-	if EnableMetrics {
-		metric.GetFastMetricsInstance().FastRecordCacheMiss()
-	}
-
 	// Determine resolver based on routing configuration
 	resolver := dnsresolver.ResolverForClient
 	if EnableDomainRouting {
@@ -226,6 +221,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
 		if EnableMetrics {
 			qTypeStr := dns.TypeToString[qtype]
+			metric.GetFastMetricsInstance().FastRecordCacheMiss()
 			metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "nxdomain", timer.Elapsed())
 		}
 		return answers
@@ -238,6 +234,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	SaveToCache(key, answers, ttl)
 	if EnableMetrics {
 		qTypeStr := dns.TypeToString[qtype]
+		metric.GetFastMetricsInstance().FastRecordCacheMiss()
 		metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "success", timer.Elapsed())
 	}
 	return answers

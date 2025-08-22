@@ -26,8 +26,6 @@ var cfg = config.Get()
 // rateLimiter will be initialized after rate limiting is set up
 var rateLimiter *ratelimit.RateLimiter
 
-var metricRecorder *metric.FastMetricsRecorder
-
 // Counter for periodically recording suspicion metrics to avoid overhead
 var suspicionMetricsCounter uint64
 
@@ -54,7 +52,7 @@ func (h *dnsHandler) sendRateLimitResponse(w dns.ResponseWriter, r *dns.Msg, tim
 
 	if cfg.EnableMetrics {
 		duration := timer.Elapsed()
-		metricRecorder.FastRecordDNSQueryWithDeviceIPAndDomain("rate_limited", "blocked", clientIP, domain, duration)
+		metric.GetFastMetricsInstance().FastRecordDNSQueryWithDeviceIPAndDomain("rate_limited", "blocked", clientIP, domain, duration)
 	}
 
 	if err := w.WriteMsg(msg); err != nil {
@@ -67,13 +65,15 @@ func (h *dnsHandler) finalizeDNSResponse(w dns.ResponseWriter, msg *dns.Msg, tim
 	// Record DNS query metric with device IP and domain tracking
 	if cfg.EnableMetrics {
 		duration := timer.Elapsed()
-		metricRecorder.FastRecordDNSQueryWithDeviceIPAndDomain(queryType, queryStatus, clientIP, domain, duration)
+		// Use the combined method to record DNS query, device IP, and domain in one call
+		metric.GetFastMetricsInstance().FastRecordDNSQueryWithDeviceIPAndDomain(queryType, queryStatus, clientIP, domain, duration)
 	}
 
 	// Handle response writing separately from query metrics
 	if err := w.WriteMsg(msg); err != nil {
 		if cfg.EnableMetrics {
-			metricRecorder.FastRecordError("dns_response_write_failed", "dns_handler")
+			// Record write failure as a separate metric
+			metric.GetFastMetricsInstance().FastRecordError("dns_response_write_failed", "dns_handler")
 		}
 		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
 	}
@@ -102,12 +102,12 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 			// Record rate limiting blocked metric
 			if cfg.EnableMetrics {
-				metricRecorder.FastRecordRateLimitBlocked(clientIP, result.Reason)
+				metric.GetFastMetricsInstance().FastRecordRateLimitBlocked(clientIP, result.Reason)
 
 				// Record suspicion level for blocked clients
 				if clientStats := rateLimiter.GetClientStats(clientIP); clientStats["exists"].(bool) {
 					suspicionLevel := clientStats["suspicion_level"].(int32)
-					metricRecorder.FastSetRateLimitSuspiciousClient(clientIP, float64(suspicionLevel))
+					metric.GetFastMetricsInstance().FastSetRateLimitSuspiciousClient(clientIP, float64(suspicionLevel))
 				}
 			}
 
@@ -116,7 +116,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		} else {
 			// Record rate limiting allowed metric
 			if cfg.EnableMetrics {
-				metricRecorder.FastRecordRateLimitAllowed(clientIP)
+				metric.GetFastMetricsInstance().FastRecordRateLimitAllowed(clientIP)
 
 				// Periodically record suspicion levels for active clients (every 100 requests to avoid overhead)
 				// Use a simple counter to reduce frequency
@@ -124,7 +124,7 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					if clientStats := rateLimiter.GetClientStats(clientIP); clientStats["exists"].(bool) {
 						suspicionLevel := clientStats["suspicion_level"].(int32)
 						if suspicionLevel > 0 { // Only record if there's some suspicion
-							metricRecorder.FastSetRateLimitSuspiciousClient(clientIP, float64(suspicionLevel))
+							metric.GetFastMetricsInstance().FastSetRateLimitSuspiciousClient(clientIP, float64(suspicionLevel))
 						}
 					}
 				}
@@ -149,7 +149,6 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	} else {
 		queryStatus = "no_answers"
 	}
-
 	// Record metrics and send response
 	h.finalizeDNSResponse(w, msg, timer, queryType, queryStatus, clientIP, domain)
 }
@@ -159,15 +158,9 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: start")
 	defer logutil.Logger.Debug("StartDNSServer: end")
 	// --- Initialization ---
-	if cfg.EnableMetrics {
-		metricRecorder = metric.GetFastMetricsInstance()
-		go metric.StartMetricsServer()
-		go metric.StartMetricsUpdater()
-		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", cfg.MetricsPort)
-	}
-	cache.Init(cfg.CacheTTL, cfg.EnableMetrics, metricRecorder, cfg.EnableClientRouting, cfg.EnableDomainRouting)
+	cache.Init(cfg.CacheTTL, cfg.EnableMetrics, metric.GetFastMetricsInstance(), cfg.EnableClientRouting, cfg.EnableDomainRouting)
 	logutil.Logger.Debug("StartDNSServer: cache initialized")
-	dnssource.InitDNSSource(metricRecorder)
+	dnssource.InitDNSSource(metric.GetFastMetricsInstance())
 	logutil.Logger.Debug("StartDNSServer: dns source initialized")
 	dnsresolver.UpdateDNSServersCache()
 	logutil.Logger.Debug("StartDNSServer: dns servers cache updated")
@@ -184,7 +177,6 @@ func StartDNSServer() {
 	}
 	// Start cache stats and metrics logging in background
 	cache.StartCacheStatsLogger()
-
 	// DNS server setup
 	handler := new(dnsHandler)
 	server := &dns.Server{
