@@ -62,6 +62,13 @@ type Config struct {
 	CachePersistenceFile     string
 	CachePersistenceInterval time.Duration
 	CachePersistenceMaxAge   time.Duration
+
+	// Stale Cache Update Configuration
+	EnableStaleUpdater        bool
+	StaleUpdateThreshold      time.Duration // How close to expiry before updating
+	StaleUpdateInterval       time.Duration // How often to check for stale entries
+	StaleUpdateMinAccessCount int           // Minimum access count to qualify for stale update
+	StaleUpdateMaxConcurrent  int           // Maximum concurrent stale updates
 }
 
 var (
@@ -121,6 +128,13 @@ func loadConfig() *Config {
 		CachePersistenceFile:     util.GetEnvString("CACHE_PERSISTENCE_FILE", "/app/cache/dns_cache.json"),
 		CachePersistenceInterval: util.GetEnvDuration("CACHE_PERSISTENCE_INTERVAL", 5*time.Minute),
 		CachePersistenceMaxAge:   util.GetEnvDuration("CACHE_PERSISTENCE_MAX_AGE", 1*time.Hour),
+
+		// Stale Cache Update Configuration
+		EnableStaleUpdater:        util.GetEnvBool("ENABLE_STALE_UPDATER", true),
+		StaleUpdateThreshold:      util.GetEnvDuration("STALE_UPDATE_THRESHOLD", 2*time.Minute),
+		StaleUpdateInterval:       util.GetEnvDuration("STALE_UPDATE_INTERVAL", 30*time.Second),
+		StaleUpdateMinAccessCount: util.GetEnvInt("STALE_UPDATE_MIN_ACCESS_COUNT", 5),
+		StaleUpdateMaxConcurrent:  util.GetEnvInt("STALE_UPDATE_MAX_CONCURRENT", 10),
 	}
 
 	return c
@@ -163,6 +177,20 @@ func (c *Config) Validate() error {
 	}
 	if c.DomainRoutingTableReloadInterval <= 0 {
 		return fmt.Errorf("DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL must be positive, got %d", c.DomainRoutingTableReloadInterval)
+	}
+	if c.EnableStaleUpdater {
+		if c.StaleUpdateThreshold <= 0 {
+			return fmt.Errorf("STALE_UPDATE_THRESHOLD must be positive, got %v", c.StaleUpdateThreshold)
+		}
+		if c.StaleUpdateInterval <= 0 {
+			return fmt.Errorf("STALE_UPDATE_INTERVAL must be positive, got %v", c.StaleUpdateInterval)
+		}
+		if c.StaleUpdateMinAccessCount <= 0 {
+			return fmt.Errorf("STALE_UPDATE_MIN_ACCESS_COUNT must be positive, got %d", c.StaleUpdateMinAccessCount)
+		}
+		if c.StaleUpdateMaxConcurrent <= 0 {
+			return fmt.Errorf("STALE_UPDATE_MAX_CONCURRENT must be positive, got %d", c.StaleUpdateMaxConcurrent)
+		}
 	}
 	return nil
 }

@@ -41,13 +41,19 @@ var (
 	EnableDomainRouting bool
 	persistenceTicker   *time.Ticker
 	cfg                 = config.Get() // Global config instance
+
+	// Stale cache updater variables
+	staleUpdaterTicker   *time.Ticker
+	staleUpdateSemaphore chan struct{}
+	accessTracker        *AccessTracker
 )
 
 // CacheEntry represents a cache entry for persistence
 type CacheEntry struct {
-	Key        string    `json:"key"`
-	Answers    []string  `json:"answers"`    // DNS RR serialized as strings
-	Expiration time.Time `json:"expiration"` // Zero time means no expiration
+	Key        string      `json:"key"`
+	Answers    []string    `json:"answers"`               // DNS RR serialized as strings
+	Expiration time.Time   `json:"expiration"`            // Zero time means no expiration
+	AccessInfo *AccessInfo `json:"access_info,omitempty"` // Access tracking info
 }
 
 // CacheSnapshot represents the entire cache state for persistence
@@ -63,18 +69,118 @@ type CacheStats struct {
 	TotalRequests int64 `json:"total_requests"`
 }
 
+// AccessInfo tracks access patterns for individual cache entries
+type AccessInfo struct {
+	AccessCount int64     `json:"access_count"`
+	LastAccess  time.Time `json:"last_access"`
+	FirstAccess time.Time `json:"first_access"`
+	Domain      string    `json:"domain"`
+	QueryType   uint16    `json:"query_type"`
+}
+
+// AccessTracker manages access tracking for cache entries
+type AccessTracker struct {
+	accessMap sync.Map // map[string]*AccessInfo
+	mu        sync.RWMutex
+}
+
+// NewAccessTracker creates a new access tracker
+func NewAccessTracker() *AccessTracker {
+	return &AccessTracker{}
+}
+
+// TrackAccess records an access to a cache entry
+func (at *AccessTracker) TrackAccess(key, domain string, qtype uint16) {
+	now := time.Now()
+
+	// Try to load existing access info
+	if value, ok := at.accessMap.Load(key); ok {
+		if accessInfo, ok := value.(*AccessInfo); ok {
+			atomic.AddInt64(&accessInfo.AccessCount, 1)
+			at.mu.Lock()
+			accessInfo.LastAccess = now
+			at.mu.Unlock()
+			return
+		}
+	}
+
+	// Create new access info
+	accessInfo := &AccessInfo{
+		AccessCount: 1,
+		LastAccess:  now,
+		FirstAccess: now,
+		Domain:      domain,
+		QueryType:   qtype,
+	}
+	at.accessMap.Store(key, accessInfo)
+}
+
+// GetAccessInfo returns access information for a key
+func (at *AccessTracker) GetAccessInfo(key string) (*AccessInfo, bool) {
+	if value, ok := at.accessMap.Load(key); ok {
+		if accessInfo, ok := value.(*AccessInfo); ok {
+			return accessInfo, true
+		}
+	}
+	return nil, false
+}
+
+// GetFrequentlyAccessed returns keys that are frequently accessed
+func (at *AccessTracker) GetFrequentlyAccessed(minCount int64) []string {
+	var keys []string
+	at.accessMap.Range(func(key, value interface{}) bool {
+		if accessInfo, ok := value.(*AccessInfo); ok {
+			if atomic.LoadInt64(&accessInfo.AccessCount) >= minCount {
+				keys = append(keys, key.(string))
+			}
+		}
+		return true
+	})
+	return keys
+}
+
+// CleanupExpiredEntries removes access tracking for entries that are no longer in cache
+func (at *AccessTracker) CleanupExpiredEntries() {
+	if DnsCache == nil {
+		return
+	}
+
+	cacheItems := DnsCache.Items()
+	at.accessMap.Range(func(key, value interface{}) bool {
+		keyStr := key.(string)
+		if _, exists := cacheItems[keyStr]; !exists {
+			at.accessMap.Delete(keyStr)
+		}
+		return true
+	})
+}
+
 func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, enableClientRouting bool, enableDomainRouting bool) {
 	DnsCache = cache.New(defaultDNSCacheTTL, 2*defaultDNSCacheTTL)
 	DefaultDNSCacheTTL = defaultDNSCacheTTL
 	EnableMetrics = enableMetrics
 	EnableClientRouting = enableClientRouting
 	EnableDomainRouting = enableDomainRouting
+
+	// Initialize access tracker
+	accessTracker = NewAccessTracker()
+
+	// Initialize stale update semaphore
+	if cfg.EnableStaleUpdater {
+		staleUpdateSemaphore = make(chan struct{}, cfg.StaleUpdateMaxConcurrent)
+	}
+
 	// Load cache from disk if persistence is enabled
 	if err := LoadCacheFromFile(); err != nil {
 		logutil.Logger.Errorf("Failed to load cache from file: %v", err)
 	}
 	// Start periodic cache persistence
 	StartCachePersistence()
+
+	// Start stale cache updater
+	if cfg.EnableStaleUpdater {
+		StartStaleUpdater()
+	}
 }
 
 // Pre-allocated buffer pool for cache keys to reduce allocations
@@ -194,6 +300,12 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	// Cache hit path - optimized for speed
 	if answers, ok := LoadFromCache(key); ok {
 		atomic.AddInt64(&cacheHits, 1)
+
+		// Track access for stale updater
+		if cfg.EnableStaleUpdater && accessTracker != nil {
+			accessTracker.TrackAccess(key, domain, qtype)
+		}
+
 		if EnableMetrics {
 			qTypeStr := dns.TypeToString[qtype]
 			fastMetrics := metric.GetFastMetricsInstance()
@@ -391,10 +503,26 @@ func SaveCacheToFile() error {
 		finalAnswerStrings := make([]string, len(answerStrings))
 		copy(finalAnswerStrings, answerStrings)
 
+		// Get access info if stale updater is enabled
+		var accessInfo *AccessInfo
+		if cfg.EnableStaleUpdater && accessTracker != nil {
+			if ai, found := accessTracker.GetAccessInfo(key); found {
+				// Create a copy of access info for persistence
+				accessInfo = &AccessInfo{
+					AccessCount: atomic.LoadInt64(&ai.AccessCount),
+					LastAccess:  ai.LastAccess,
+					FirstAccess: ai.FirstAccess,
+					Domain:      ai.Domain,
+					QueryType:   ai.QueryType,
+				}
+			}
+		}
+
 		entries = append(entries, CacheEntry{
 			Key:        key,
 			Answers:    finalAnswerStrings,
 			Expiration: expiration,
+			AccessInfo: accessInfo,
 		})
 
 		// Return slice to pool
@@ -521,6 +649,18 @@ func LoadCacheFromFile() error {
 				copy(cachedAnswers, answers)
 				DnsCache.Set(entry.Key, cachedAnswers, ttl)
 				loadedCount++
+
+				// Restore access tracking information if available
+				if cfg.EnableStaleUpdater && accessTracker != nil && entry.AccessInfo != nil {
+					restoredAccessInfo := &AccessInfo{
+						AccessCount: entry.AccessInfo.AccessCount,
+						LastAccess:  entry.AccessInfo.LastAccess,
+						FirstAccess: entry.AccessInfo.FirstAccess,
+						Domain:      entry.AccessInfo.Domain,
+						QueryType:   entry.AccessInfo.QueryType,
+					}
+					accessTracker.accessMap.Store(entry.Key, restoredAccessInfo)
+				}
 			}
 
 			// Return slice to pool for reuse
@@ -573,6 +713,150 @@ func StopCachePersistence() {
 		} else {
 			logutil.Logger.Info("Cache saved successfully during shutdown")
 		}
+	}
+}
+
+// StartStaleUpdater starts the periodic stale cache updater
+func StartStaleUpdater() {
+	if !cfg.EnableStaleUpdater {
+		return
+	}
+
+	staleUpdaterTicker = time.NewTicker(cfg.StaleUpdateInterval)
+	go func() {
+		defer staleUpdaterTicker.Stop()
+		for range staleUpdaterTicker.C {
+			updateStaleEntries()
+		}
+	}()
+
+	logutil.Logger.Infof("Stale cache updater enabled with interval: %v, threshold: %v, min access count: %d",
+		cfg.StaleUpdateInterval, cfg.StaleUpdateThreshold, cfg.StaleUpdateMinAccessCount)
+}
+
+// StopStaleUpdater stops the stale updater
+func StopStaleUpdater() {
+	if staleUpdaterTicker != nil {
+		staleUpdaterTicker.Stop()
+		logutil.Logger.Info("Stale cache updater stopped")
+	}
+}
+
+// updateStaleEntries checks for and updates stale frequently-accessed cache entries
+func updateStaleEntries() {
+	if DnsCache == nil || accessTracker == nil {
+		return
+	}
+
+	// Clean up access tracking for expired cache entries
+	accessTracker.CleanupExpiredEntries()
+
+	// Get frequently accessed entries
+	frequentKeys := accessTracker.GetFrequentlyAccessed(int64(cfg.StaleUpdateMinAccessCount))
+	if len(frequentKeys) == 0 {
+		return
+	}
+
+	staleCount := 0
+	var updatedCount int64
+
+	for _, key := range frequentKeys {
+		// Check if entry is close to expiring
+		if value, expiration, found := DnsCache.GetWithExpiration(key); found {
+			_ = value // We don't need the value, just checking expiration
+			var timeUntilExpiry time.Duration
+			if expiration.IsZero() {
+				// Entry never expires, skip
+				continue
+			}
+			timeUntilExpiry = time.Until(expiration)
+
+			// Check if entry is within the stale threshold
+			if timeUntilExpiry <= cfg.StaleUpdateThreshold && timeUntilExpiry > 0 {
+				staleCount++
+
+				// Try to acquire semaphore for concurrent updates
+				select {
+				case staleUpdateSemaphore <- struct{}{}:
+					// Successfully acquired semaphore, update in background
+					go func(cacheKey string) {
+						defer func() { <-staleUpdateSemaphore }()
+
+						if updateStaleEntry(cacheKey) {
+							atomic.AddInt64(&updatedCount, 1)
+						}
+					}(key)
+				default:
+					// Semaphore full, skip this update
+					logutil.Logger.Debugf("Skipping stale update for %s - too many concurrent updates", key)
+				}
+			}
+		}
+	}
+
+	if staleCount > 0 {
+		finalUpdatedCount := atomic.LoadInt64(&updatedCount)
+		logutil.Logger.Debugf("Found %d stale entries, initiated %d updates", staleCount, finalUpdatedCount)
+	}
+}
+
+// updateStaleEntry updates a single stale cache entry
+func updateStaleEntry(key string) bool {
+	// Get access info to extract domain and query type
+	accessInfo, ok := accessTracker.GetAccessInfo(key)
+	if !ok {
+		logutil.Logger.Debugf("No access info found for stale key: %s", key)
+		return false
+	}
+
+	domain := accessInfo.Domain
+	qtype := accessInfo.QueryType
+
+	logutil.Logger.Debugf("Updating stale entry: %s (domain: %s, type: %d, access count: %d)",
+		key, domain, qtype, atomic.LoadInt64(&accessInfo.AccessCount))
+
+	// Determine resolver based on routing configuration
+	resolver := dnsresolver.ResolverForClient
+	if EnableDomainRouting {
+		if _, ok := domainrouting.GetRoutingTable()[domain]; ok {
+			resolver = dnsresolver.ResolverForDomain
+		}
+	}
+
+	// Resolve DNS query with a dummy client IP for stale updates
+	answers := resolver(domain, qtype, "127.0.0.1")
+
+	// Handle the response
+	if len(answers) == 0 {
+		// For negative responses, use a shorter TTL
+		SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
+	} else {
+		// Calculate TTL for positive responses
+		ttl := calculateTTL(answers)
+		SaveToCache(key, answers, ttl)
+	}
+
+	if EnableMetrics {
+		metric.GetFastMetricsInstance().FastRecordCacheHit() // Count as a cache refresh
+		qTypeStr := dns.TypeToString[qtype]
+		if len(answers) == 0 {
+			metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "stale_update_nxdomain", 0)
+		} else {
+			metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "stale_update_success", 0)
+		}
+	}
+
+	logutil.Logger.Debugf("Successfully updated stale entry: %s", key)
+	return true
+}
+
+// Cleanup stops all cache background processes and performs final cleanup
+func Cleanup() {
+	StopCachePersistence()
+	StopStaleUpdater()
+
+	if cfg.EnableStaleUpdater && accessTracker != nil {
+		logutil.Logger.Info("Cleaning up access tracker")
 	}
 }
 
