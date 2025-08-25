@@ -59,6 +59,7 @@ const (
 	MetricTypeDeviceIPDNSQuery
 	MetricTypeDomainQuery
 	MetricTypeDomainHit
+	MetricTypeQueryCoalesced
 )
 
 func NewFastMetricsRecorder() *FastMetricsRecorder {
@@ -354,6 +355,15 @@ func (f *FastMetricsRecorder) FastRecordDomainHit(domain string) {
 	// Send domain hit update to batch processor
 	select {
 	case f.metricUpdates <- NewDomainHitUpdate(domain, newCount):
+	default:
+		// Channel full, skip to avoid blocking
+	}
+}
+
+// FastRecordQueryCoalesced records a query coalescing event
+func (f *FastMetricsRecorder) FastRecordQueryCoalesced() {
+	select {
+	case f.metricUpdates <- NewMetricUpdate(MetricTypeQueryCoalesced):
 	default:
 		// Channel full, skip to avoid blocking
 	}

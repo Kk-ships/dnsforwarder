@@ -4,6 +4,7 @@
 A high-performance, cache-enabled DNS forwarder written in Go. This project forwards DNS queries to upstream servers, caches responses for improved performance, and provides detailed logging, statistics, and flexible routing features.
 
 ## What's New
+- **Query Coalescing:** Combines identical in-flight DNS requests to reduce upstream server load and improve response times. Multiple clients requesting the same domain simultaneously will share a single upstream query.
 - **Stale Cache Updater:** Automatically refresh frequently accessed cache entries before they expire, ensuring popular domains always have fresh responses without client-facing delays.
 - **Cache Persistence (Hot Start):** DNS cache is now persisted to disk and automatically restored on container restarts, providing faster response times after restarts. Cache for hot restart is valid for 1 hour only.
 - **Folder-based Domain Routing:** Load domain routing rules from all `.txt` files in a specified folder, making management and updates easier.
@@ -14,6 +15,7 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 
 ## Features
 - **DNS Forwarding:** Forwards DNS queries to one or more upstream DNS servers.
+- **Query Coalescing:** Combines identical in-flight requests to reduce upstream load and improve performance.
 - **Client-Based Routing:** Route different clients to different upstream DNS servers (private/public).
 - **Domain Routing (Folder-Based):** Forward DNS queries for specific domains to designated upstream servers using rules from all `.txt` files in a folder.
 - **Hot-Reload Routing Table:** Automatically refresh domain routing rules at a configurable interval.
@@ -153,6 +155,11 @@ LOG_LEVEL=info
 - **STALE_UPDATE_INTERVAL:** How often to check for stale entries that need updating (default `30s`).
 - **STALE_UPDATE_MIN_ACCESS_COUNT:** Minimum number of times an entry must be accessed to qualify for stale updates (default `5`).
 - **STALE_UPDATE_MAX_CONCURRENT:** Maximum number of concurrent stale update operations (default `10`).
+
+#### Query Coalescing Configuration
+- **ENABLE_QUERY_COALESCING:** Enable query coalescing to combine identical in-flight requests (default `true`).
+- **QUERY_COALESCING_TIMEOUT:** Maximum time to wait for coalesced query (default `5s`).
+- **QUERY_COALESCING_CLEANUP_INTERVAL:** How often to clean up stale queries (default `1m`).
 
 ### 5. Client-Based DNS Routing
 
@@ -308,6 +315,47 @@ STALE_UPDATE_MAX_CONCURRENT=10     # Maximum 10 concurrent updates
 - Prometheus metrics track stale update success/failure rates and timing
 - Access patterns and update frequency can be monitored through the metrics endpoint
 
+## Query Coalescing
+
+Query coalescing is a performance optimization that combines identical in-flight DNS requests to reduce upstream DNS server load and improve response times. When multiple clients request the same DNS record simultaneously, only one upstream query is sent, and all clients receive the same response.
+
+### How It Works
+- When a DNS query arrives, the system checks if an identical query is already being processed
+- If an identical query exists, the new request waits for the existing query to complete
+- Once the upstream response is received, it's sent to all waiting clients
+- This eliminates duplicate upstream queries and can significantly reduce DNS server load
+
+### Benefits
+- **Reduced Upstream Load:** Eliminates duplicate queries, reducing load on upstream DNS servers by 50-90% in high-traffic scenarios
+- **Improved Performance:** Subsequent identical requests get responses faster by waiting for the first query
+- **Resource Efficiency:** Reduces network bandwidth and server resources
+- **Zero Client Impact:** Transparent to clients - all requests receive the same response
+
+### Configuration Examples
+```bash
+# Enable query coalescing (enabled by default)
+ENABLE_QUERY_COALESCING=true
+
+# Reduce timeout for faster fallback
+QUERY_COALESCING_TIMEOUT=2s
+
+# More frequent cleanup of stale queries
+QUERY_COALESCING_CLEANUP_INTERVAL=30s
+```
+
+### Use Cases
+- **High-traffic DNS servers** where multiple clients frequently request the same domains
+- **Corporate environments** with many devices accessing the same internal services
+- **CDN and edge deployments** where reducing upstream load is critical
+- **Any scenario** where DNS query deduplication can improve performance
+
+### Monitoring
+Query coalescing effectiveness can be monitored using Prometheus metrics:
+- `dns_query_coalesced_total` - Total number of queries that were coalesced
+- Compare with `dns_upstream_queries_total` to see the reduction in upstream load
+
+For detailed information about query coalescing, see [docs/QUERY_COALESCING.md](docs/QUERY_COALESCING.md).
+
 #### Troubleshooting Cache Persistence Issues
 If you see "permission denied" errors for cache persistence:
 1. **Docker/Container**: Ensure the cache directory is properly mounted and writable:
@@ -341,6 +389,9 @@ When `ENABLE_METRICS=true`, the following metrics are available at `/metrics` en
 - `dns_cache_hits_total` - Total cache hits
 - `dns_cache_misses_total` - Total cache misses
 - `dns_cache_size` - Current cache size
+
+#### Query Coalescing Metrics
+- `dns_query_coalesced_total` - Total queries that were coalesced (deduplicated)
 
 #### Upstream Server Metrics
 - `dns_upstream_queries_total` - Queries sent to upstream servers

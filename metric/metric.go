@@ -122,6 +122,12 @@ var (
 		},
 		[]string{"domain"},
 	)
+	queryCoalescedTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "dns_query_coalesced_total",
+			Help: "Total number of DNS queries that were coalesced (deduplicated)",
+		},
+	)
 )
 
 var (
@@ -165,6 +171,7 @@ func init() {
 		deviceIPDNSQueries,
 		domainQueriesTotal,
 		domainHitsTotal,
+		queryCoalescedTotal,
 	)
 }
 

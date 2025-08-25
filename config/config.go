@@ -69,6 +69,11 @@ type Config struct {
 	StaleUpdateInterval       time.Duration // How often to check for stale entries
 	StaleUpdateMinAccessCount int           // Minimum access count to qualify for stale update
 	StaleUpdateMaxConcurrent  int           // Maximum concurrent stale updates
+
+	// Query Coalescing Configuration
+	EnableQueryCoalescing          bool
+	QueryCoalescingTimeout         time.Duration // Max time to wait for coalesced query
+	QueryCoalescingCleanupInterval time.Duration // How often to clean up stale queries
 }
 
 var (
@@ -135,6 +140,11 @@ func loadConfig() *Config {
 		StaleUpdateInterval:       util.GetEnvDuration("STALE_UPDATE_INTERVAL", 30*time.Second),
 		StaleUpdateMinAccessCount: util.GetEnvInt("STALE_UPDATE_MIN_ACCESS_COUNT", 5),
 		StaleUpdateMaxConcurrent:  util.GetEnvInt("STALE_UPDATE_MAX_CONCURRENT", 10),
+
+		// Query Coalescing Configuration
+		EnableQueryCoalescing:          util.GetEnvBool("ENABLE_QUERY_COALESCING", true),
+		QueryCoalescingTimeout:         util.GetEnvDuration("QUERY_COALESCING_TIMEOUT", 5*time.Second),
+		QueryCoalescingCleanupInterval: util.GetEnvDuration("QUERY_COALESCING_CLEANUP_INTERVAL", 1*time.Minute),
 	}
 
 	return c
@@ -190,6 +200,14 @@ func (c *Config) Validate() error {
 		}
 		if c.StaleUpdateMaxConcurrent <= 0 {
 			return fmt.Errorf("STALE_UPDATE_MAX_CONCURRENT must be positive, got %d", c.StaleUpdateMaxConcurrent)
+		}
+	}
+	if c.EnableQueryCoalescing {
+		if c.QueryCoalescingTimeout <= 0 {
+			return fmt.Errorf("QUERY_COALESCING_TIMEOUT must be positive, got %v", c.QueryCoalescingTimeout)
+		}
+		if c.QueryCoalescingCleanupInterval <= 0 {
+			return fmt.Errorf("QUERY_COALESCING_CLEANUP_INTERVAL must be positive, got %v", c.QueryCoalescingCleanupInterval)
 		}
 	}
 	return nil

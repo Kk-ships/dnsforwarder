@@ -45,6 +45,7 @@ var metricLabelRequirements = map[uint8]int{
 	MetricTypeCacheMiss:               0, // no labels
 	MetricTypeCacheSize:               0, // no labels
 	MetricTypeUpstreamServersTotal:    0, // no labels
+	MetricTypeQueryCoalesced:          0, // no labels
 }
 
 // Optimized validation using lookup table
@@ -238,5 +239,7 @@ func processMetricUpdate(update metricUpdate) {
 		if len(update.Labels) >= 1 {
 			domainHitsTotal.WithLabelValues(update.Labels[0]).Set(update.Value)
 		}
+	case MetricTypeQueryCoalesced:
+		queryCoalescedTotal.Inc()
 	}
 }

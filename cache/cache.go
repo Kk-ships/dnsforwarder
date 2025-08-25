@@ -26,6 +26,7 @@ import (
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/metric"
+	"dnsloadbalancer/querycoalescing"
 
 	"github.com/miekg/dns"
 	"github.com/patrickmn/go-cache"
@@ -46,6 +47,9 @@ var (
 	staleUpdaterTicker   *time.Ticker
 	staleUpdateSemaphore chan struct{}
 	accessTracker        *AccessTracker
+
+	// Query coalescer instance
+	queryCoalescer *querycoalescing.QueryCoalescer
 )
 
 // CacheEntry represents a cache entry for persistence
@@ -168,6 +172,11 @@ func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ interface{}, e
 	// Initialize stale update semaphore
 	if cfg.EnableStaleUpdater {
 		staleUpdateSemaphore = make(chan struct{}, cfg.StaleUpdateMaxConcurrent)
+	}
+
+	// Initialize query coalescer
+	if cfg.EnableQueryCoalescing {
+		queryCoalescer = querycoalescing.NewQueryCoalescer(cfg, metric.GetFastMetricsInstance())
 	}
 
 	// Load cache from disk if persistence is enabled
@@ -322,16 +331,31 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		metric.GetFastMetricsInstance().FastRecordCacheMiss()
 	}
 
-	// Determine resolver based on routing configuration
-	resolver := dnsresolver.ResolverForClient
-	if EnableDomainRouting {
-		if _, ok := domainrouting.GetRoutingTable()[domain]; ok {
-			resolver = dnsresolver.ResolverForDomain
-		}
-	}
+	// Use query coalescing if enabled
+	var answers []dns.RR
+	if cfg.EnableQueryCoalescing && queryCoalescer != nil {
+		// Generate coalescing key - include client IP only if client routing is enabled
+		coalescingKey := querycoalescing.QueryKey(domain, qtype, clientIP, EnableClientRouting)
 
-	// Resolve DNS query
-	answers := resolver(domain, qtype, clientIP)
+		// Define the query function that will be executed (potentially coalesced)
+		queryFunc := func() ([]dns.RR, error) {
+			result := executeUpstreamQuery(domain, qtype, clientIP)
+			return result, nil // We don't return errors in this context, empty slice means no answer
+		}
+
+		// Execute with coalescing
+		coalescedAnswers, err := queryCoalescer.CoalesceQuery(coalescingKey, queryFunc)
+		if err != nil {
+			// Log error but continue with empty answers (same as before)
+			logutil.Logger.Debugf("Query coalescing error for %s: %v", domain, err)
+			answers = []dns.RR{}
+		} else {
+			answers = coalescedAnswers
+		}
+	} else {
+		// Execute query directly without coalescing
+		answers = executeUpstreamQuery(domain, qtype, clientIP)
+	}
 
 	// Handle negative responses
 	if len(answers) == 0 {
@@ -353,6 +377,20 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "success", timer.Elapsed())
 	}
 	return answers
+}
+
+// executeUpstreamQuery performs the actual DNS query to upstream servers
+func executeUpstreamQuery(domain string, qtype uint16, clientIP string) []dns.RR {
+	// Determine resolver based on routing configuration
+	resolver := dnsresolver.ResolverForClient
+	if EnableDomainRouting {
+		if _, ok := domainrouting.GetRoutingTable()[domain]; ok {
+			resolver = dnsresolver.ResolverForDomain
+		}
+	}
+
+	// Resolve DNS query
+	return resolver(domain, qtype, clientIP)
 }
 
 // calculateTTL determines the appropriate TTL for caching based on DNS response
@@ -856,6 +894,10 @@ func Cleanup() {
 
 	if cfg.EnableStaleUpdater && accessTracker != nil {
 		logutil.Logger.Info("Cleaning up access tracker")
+	}
+
+	if cfg.EnableQueryCoalescing && queryCoalescer != nil {
+		queryCoalescer.Cleanup()
 	}
 }
 
