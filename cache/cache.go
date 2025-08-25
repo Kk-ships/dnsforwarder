@@ -762,8 +762,7 @@ func updateStaleEntries() {
 
 	for _, key := range frequentKeys {
 		// Check if entry is close to expiring
-		if value, expiration, found := DnsCache.GetWithExpiration(key); found {
-			_ = value // We don't need the value, just checking expiration
+		if _, expiration, found := DnsCache.GetWithExpiration(key); found {
 			var timeUntilExpiry time.Duration
 			if expiration.IsZero() {
 				// Entry never expires, skip
