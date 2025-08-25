@@ -4,6 +4,7 @@
 A high-performance, cache-enabled DNS forwarder written in Go. This project forwards DNS queries to upstream servers, caches responses for improved performance, and provides detailed logging, statistics, and flexible routing features.
 
 ## What's New
+- **Stale Cache Updater:** Automatically refresh frequently accessed cache entries before they expire, ensuring popular domains always have fresh responses without client-facing delays.
 - **Cache Persistence (Hot Start):** DNS cache is now persisted to disk and automatically restored on container restarts, providing faster response times after restarts. Cache for hot restart is valid for 1 hour only.
 - **Folder-based Domain Routing:** Load domain routing rules from all `.txt` files in a specified folder, making management and updates easier.
 - **Hot-Reload Domain Routing Table:** Automatically refresh domain routing rules at a configurable interval without restarting the service.
@@ -17,6 +18,7 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 - **Domain Routing (Folder-Based):** Forward DNS queries for specific domains to designated upstream servers using rules from all `.txt` files in a folder.
 - **Hot-Reload Routing Table:** Automatically refresh domain routing rules at a configurable interval.
 - **Caching:** Uses an in-memory cache to store DNS responses, reducing latency and upstream load.
+- **Stale Cache Updater:** Proactively refreshes frequently accessed cache entries before they expire to prevent cache misses for popular domains.
 - **Cache Persistence:** Automatically saves and restores cache to/from disk for hot starts after container restarts.
 - **Health Checks:** Periodically checks upstream DNS server reachability and only uses healthy servers.
 - **Statistics:** Logs DNS usage and cache hit/miss rates.
@@ -29,7 +31,7 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 ### 1. Build and Run Locally
 
 #### Prerequisites
-- Go 1.24+
+- Go 1.25+
 - [miekg/dns](https://github.com/miekg/dns) and [patrickmn/go-cache](https://github.com/patrickmn/go-cache) (installed via `go mod`)
 
 #### Build
@@ -145,6 +147,13 @@ LOG_LEVEL=info
 - **CACHE_PERSISTENCE_INTERVAL:** How often to save cache to disk (default `5m`).
 - **CACHE_PERSISTENCE_MAX_AGE:** Maximum age of cache file before it's considered stale and ignored (default `1h`).
 
+#### Stale Cache Updater Configuration
+- **ENABLE_STALE_UPDATER:** Enable proactive updates of frequently accessed cache entries before they expire (default `true`).
+- **STALE_UPDATE_THRESHOLD:** How close to expiry (time remaining) before an entry is considered stale and updated (default `2m`).
+- **STALE_UPDATE_INTERVAL:** How often to check for stale entries that need updating (default `30s`).
+- **STALE_UPDATE_MIN_ACCESS_COUNT:** Minimum number of times an entry must be accessed to qualify for stale updates (default `5`).
+- **STALE_UPDATE_MAX_CONCURRENT:** Maximum number of concurrent stale update operations (default `10`).
+
 ### 5. Client-Based DNS Routing
 
 The DNS forwarder supports intelligent client-based routing, allowing you to direct different clients to different upstream DNS servers. This is perfect for scenarios where you want:
@@ -258,7 +267,48 @@ address=/internal.corp/10.10.1.1
 - Make sure the file paths in `DOMAIN_ROUTING_FOLDER` are correct and accessible by the DNS forwarder.
 - Ensure each rule is in the correct format and not commented out.
 
-#### Cache Persistence Issues
+## Stale Cache Updater
+
+The Stale Cache Updater is a proactive caching feature that automatically refreshes frequently accessed cache entries before they expire. This ensures that popular domains always have fresh DNS responses without causing client-facing delays.
+
+### How It Works
+- The system tracks access patterns for all cached DNS entries, recording access counts and timestamps.
+- Periodically (based on `STALE_UPDATE_INTERVAL`), the updater checks for cache entries that are:
+  1. **Frequently accessed** (access count >= `STALE_UPDATE_MIN_ACCESS_COUNT`)
+  2. **Close to expiring** (time until expiry <= `STALE_UPDATE_THRESHOLD`)
+- These entries are refreshed in the background by re-querying the upstream DNS servers.
+- Updates are performed concurrently with a limit set by `STALE_UPDATE_MAX_CONCURRENT` to prevent overwhelming upstream servers.
+- Access tracking information is persisted along with cache entries for continuity across restarts.
+
+### Benefits
+- **Zero Client Impact:** Popular domains are refreshed before expiration, eliminating cache miss delays for frequently requested domains.
+- **Improved Performance:** Reduces overall DNS resolution times for commonly accessed domains.
+- **Smart Resource Usage:** Only updates entries that are actually being used frequently.
+- **Configurable Behavior:** All thresholds and intervals can be tuned based on your traffic patterns.
+- **Metrics Integration:** Stale updates are tracked in Prometheus metrics for monitoring and optimization.
+
+### Example Configuration
+Add to your `.env` file:
+```
+ENABLE_STALE_UPDATER=true
+STALE_UPDATE_THRESHOLD=2m          # Update entries within 2 minutes of expiry
+STALE_UPDATE_INTERVAL=30s          # Check for stale entries every 30 seconds
+STALE_UPDATE_MIN_ACCESS_COUNT=5    # Only update entries accessed 5+ times
+STALE_UPDATE_MAX_CONCURRENT=10     # Maximum 10 concurrent updates
+```
+
+### Use Cases
+- **High-traffic DNS servers** where popular domains should always have cached responses
+- **Corporate environments** where internal services and frequently accessed external domains need consistent performance
+- **CDN and edge deployments** where cache miss latency directly impacts user experience
+- **Gaming and streaming services** where DNS resolution delays can affect performance
+
+### Monitoring
+- Stale update operations are logged with detailed information about which entries are being refreshed
+- Prometheus metrics track stale update success/failure rates and timing
+- Access patterns and update frequency can be monitored through the metrics endpoint
+
+#### Troubleshooting Cache Persistence Issues
 If you see "permission denied" errors for cache persistence:
 1. **Docker/Container**: Ensure the cache directory is properly mounted and writable:
    ```yaml

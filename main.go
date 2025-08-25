@@ -121,8 +121,8 @@ func StartDNSServer() {
 	case sig := <-sigCh:
 		logutil.Logger.Infof("Received signal %s, shutting down DNS server gracefully...", sig)
 
-		// Stop cache persistence and save final state
-		cache.StopCachePersistence()
+		// Stop all cache processes and save final state
+		cache.Cleanup()
 
 		// Shutdown metrics recording gracefully
 		if cfg.EnableMetrics {
