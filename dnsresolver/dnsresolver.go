@@ -28,6 +28,18 @@ var (
 	cfg = config.Get()
 )
 
+// GetDNSMsg gets a DNS message from the pool
+func GetDNSMsg() *dns.Msg {
+	return dnsMsgPool.Get().(*dns.Msg)
+}
+
+// PutDNSMsg returns a DNS message to the pool
+func PutDNSMsg(msg *dns.Msg) {
+	// Reset the message to ensure clean state
+	*msg = dns.Msg{}
+	dnsMsgPool.Put(msg)
+}
+
 func UpdateDNSServersCache() {
 	cacheRefresh := cfg.CacheRefresh
 	dnsClient := dnsClientPool.Get().(*dns.Client)
@@ -54,9 +66,7 @@ func UpdateDNSServersCache() {
 }
 
 func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
-	m := dnsMsgPool.Get().(*dns.Msg)
-	// Reset the message to ensure clean state
-	*m = dns.Msg{}
+	m := GetDNSMsg()
 	m.SetQuestion(dns.Fqdn(domain), qtype)
 	m.RecursionDesired = true
 	return m
@@ -64,7 +74,7 @@ func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
 
 func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQuery(domain, qtype)
-	defer dnsMsgPool.Put(m)
+	defer PutDNSMsg(m)
 	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
 	result := upstreamDNSQuery(privateServers, publicServers, m)
 	return result
@@ -72,7 +82,7 @@ func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 
 func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQuery(domain, qtype)
-	defer dnsMsgPool.Put(m)
+	defer PutDNSMsg(m)
 	if svr, ok := domainrouting.GetRoutingTable()[domain]; ok {
 		result := upstreamDNSQuery([]string{svr}, []string{}, m)
 		return result

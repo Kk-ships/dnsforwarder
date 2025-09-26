@@ -27,29 +27,30 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// Use conditional timer to avoid time.Now() overhead when metrics are disabled
 	timer := metric.StartDNSQueryTimer(cfg.EnableMetrics)
 
-	logutil.Logger.Debug("ServeDNS: start")
-	defer logutil.Logger.Debug("ServeDNS: end")
-
-	msg := new(dns.Msg)
+	// Prepare response message first using pooled DNS message
+	msg := dnsresolver.GetDNSMsg()
+	defer dnsresolver.PutDNSMsg(msg)
 	msg.SetReply(r)
 	msg.Authoritative = true
 
+	// Initialize variables for logging/metrics
 	var queryType = "unknown"
 	var queryStatus = "success" // Status of DNS query resolution
 	var clientIP = ""
 	var domain = ""
+
+	// Process DNS query and get answers
 	if len(r.Question) > 0 {
 		q := r.Question[0]
 		queryType = dns.TypeToString[q.Qtype]
 		clientIP = util.GetClientIP(w)
 		domain = q.Name
-		logutil.Logger.Debugf("ServeDNS: clientIP=%s, q.Name=%s, q.Qtype=%d", clientIP, q.Name, q.Qtype)
+
 		answers := cache.ResolverWithCache(
 			q.Name, q.Qtype, clientIP,
 		)
 		if answers != nil {
 			msg.Answer = answers
-			logutil.Logger.Debugf("ServeDNS: got answers for %s", q.Name)
 		} else {
 			queryStatus = "no_answers" // DNS resolution didn't find answers
 		}
@@ -57,20 +58,24 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		queryStatus = "no_questions" // Invalid DNS query format
 	}
 
-	// Record DNS query metric with device IP and domain tracking
+	// Send DNS response immediately
+	writeErr := w.WriteMsg(msg)
+
+	// Handle metrics synchronously for better performance
 	if cfg.EnableMetrics {
 		duration := timer.Elapsed()
 		// Use the combined method to record DNS query, device IP, and domain in one call
 		metric.GetFastMetricsInstance().FastRecordDNSQueryWithDeviceIPAndDomain(queryType, queryStatus, clientIP, domain, duration)
-	}
 
-	// Handle response writing separately from query metrics
-	if err := w.WriteMsg(msg); err != nil {
-		if cfg.EnableMetrics {
-			// Record write failure as a separate metric
+		// Handle response writing error logging
+		if writeErr != nil {
 			metric.GetFastMetricsInstance().FastRecordError("dns_response_write_failed", "dns_handler")
 		}
-		logutil.Logger.Errorf("Failed to write DNS response: %v", err)
+	}
+
+	// Handle error logging immediately if needed
+	if writeErr != nil {
+		logutil.Logger.Errorf("Failed to write DNS response: %v", writeErr)
 	}
 }
 
