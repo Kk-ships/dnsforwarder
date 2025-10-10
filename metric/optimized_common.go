@@ -178,25 +178,6 @@ func (s *SystemMetricsCache) GetMemoryUsage() uint64 {
 	return s.cachedMemoryUsage
 }
 
-// Common batch processing interface
-type BatchProcessor interface {
-	ProcessBatch(updates []metricUpdate)
-	ShouldFlush(batchSize int) bool
-}
-
-// Standard batch processor implementation
-type StandardBatchProcessor struct{}
-
-func (p *StandardBatchProcessor) ProcessBatch(updates []metricUpdate) {
-	for _, update := range updates {
-		processMetricUpdate(update)
-	}
-}
-
-func (p *StandardBatchProcessor) ShouldFlush(batchSize int) bool {
-	return true // Always flush when asked
-}
-
 // Process individual metric update - centralized processing logic
 func processMetricUpdate(update metricUpdate) {
 	switch update.Type {

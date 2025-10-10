@@ -2,7 +2,6 @@ package metric
 
 import (
 	"context"
-	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/util"
 	"sync"
 	"sync/atomic"
@@ -100,11 +99,6 @@ func validateLabels(metricType uint8, labels []string) bool {
 // NewMetricUpdate creates a metric update with flexible labels
 func NewMetricUpdate(metricType uint8, labels ...string) metricUpdate {
 	return createCounterUpdate(metricType, labels...)
-}
-
-// NewMetricUpdateWithValue creates a metric update with a value and flexible labels
-func NewMetricUpdateWithValue(metricType uint8, value float64, labels ...string) metricUpdate {
-	return createGaugeUpdate(metricType, value, labels...)
 }
 
 // Specific helper functions for common metric patterns using optimized functions
@@ -321,20 +315,6 @@ func (f *FastMetricsRecorder) FastRecordError(errorType, source string) {
 	}
 }
 
-// FastRecordCustomMetric allows recording metrics with arbitrary label combinations
-// This demonstrates the full flexibility of the new design
-func (f *FastMetricsRecorder) FastRecordCustomMetric(metricType uint8, labels ...string) {
-	if !validateLabels(metricType, labels) {
-		logutil.Logger.Warnf("Invalid labels for metric type %d: %v", metricType, labels)
-		return
-	}
-
-	select {
-	case f.metricUpdates <- NewMetricUpdate(metricType, labels...):
-	default:
-	}
-}
-
 // FastUpdateDeviceIPMetrics sends device IP DNS query counts to Prometheus
 func (f *FastMetricsRecorder) FastUpdateDeviceIPMetrics() {
 	deviceIPCounts := f.GetAllDeviceIPCounts()
@@ -467,21 +447,6 @@ func (f *FastMetricsRecorder) GetAllDeviceIPCounts() map[string]uint64 {
 	return getAllCounts(&f.deviceIPCounts)
 }
 
-// GetDomainQueryCount returns the DNS query count for a specific domain
-func (f *FastMetricsRecorder) GetDomainQueryCount(domain string) uint64 {
-	return atomicGet(&f.domainQueryCounts, domain)
-}
-
-// GetAllDomainQueryCounts returns a map of all domains and their DNS query counts
-func (f *FastMetricsRecorder) GetAllDomainQueryCounts() map[string]uint64 {
-	return getAllCounts(&f.domainQueryCounts)
-}
-
-// GetDomainHitCount returns the hit count for a specific domain
-func (f *FastMetricsRecorder) GetDomainHitCount(domain string) uint64 {
-	return atomicGet(&f.domainHitCounts, domain)
-}
-
 // GetAllDomainHitCounts returns a map of all domains and their hit counts
 func (f *FastMetricsRecorder) GetAllDomainHitCounts() map[string]uint64 {
 	return getAllCounts(&f.domainHitCounts)
@@ -500,42 +465,6 @@ func (f *FastMetricsRecorder) GetTopDeviceIPs(n int) []struct {
 
 	for i, item := range items {
 		result[i].IP = item.Key
-		result[i].Count = item.Count
-	}
-	return result
-}
-
-// GetTopDomainsByQueries returns the top N domains by query count
-func (f *FastMetricsRecorder) GetTopDomainsByQueries(n int) []struct {
-	Domain string
-	Count  uint64
-} {
-	items := getTopItems(&f.domainQueryCounts, n)
-	result := make([]struct {
-		Domain string
-		Count  uint64
-	}, len(items))
-
-	for i, item := range items {
-		result[i].Domain = item.Key
-		result[i].Count = item.Count
-	}
-	return result
-}
-
-// GetTopDomainsByHits returns the top N domains by hit count
-func (f *FastMetricsRecorder) GetTopDomainsByHits(n int) []struct {
-	Domain string
-	Count  uint64
-} {
-	items := getTopItems(&f.domainHitCounts, n)
-	result := make([]struct {
-		Domain string
-		Count  uint64
-	}, len(items))
-
-	for i, item := range items {
-		result[i].Domain = item.Key
 		result[i].Count = item.Count
 	}
 	return result
@@ -606,11 +535,6 @@ func (f *FastMetricsRecorder) Close() error {
 	f.cancel()
 	f.wg.Wait()
 	return nil
-}
-
-// WaitForShutdown waits until the background processor has completely stopped
-func (f *FastMetricsRecorder) WaitForShutdown() {
-	<-f.done
 }
 
 // Global instance for fast metrics - uses lazy initialization to avoid race conditions
