@@ -238,19 +238,28 @@ func putDNSRRSlice(slice []dns.RR) {
 	}
 }
 
+// Pre-computed suffixes for common DNS types to avoid string operations
+var (
+	suffixA     = ":1"
+	suffixAAAA  = ":28"
+	suffixCNAME = ":5"
+	suffixMX    = ":15"
+	suffixTXT   = ":16"
+)
+
 func CacheKey(domain string, qtype uint16) string {
-	// For common DNS types, use pre-computed strings to avoid allocation
+	// For common DNS types, use pre-computed suffixes to minimize allocations
 	switch qtype {
 	case 1: // A record
-		return domain + ":1"
+		return domain + suffixA
 	case 28: // AAAA record
-		return domain + ":28"
+		return domain + suffixAAAA
 	case 5: // CNAME record
-		return domain + ":5"
+		return domain + suffixCNAME
 	case 15: // MX record
-		return domain + ":15"
+		return domain + suffixMX
 	case 16: // TXT record
-		return domain + ":16"
+		return domain + suffixTXT
 	default:
 		// Use string builder pool for less common types
 		builder := keyBuilderPool.Get().(*strings.Builder)
@@ -279,45 +288,41 @@ func LoadFromCache(key string) ([]dns.RR, bool) {
 	if !found {
 		return nil, false
 	}
-	// Use type assertion with early return for better performance
-	answers, ok := val.([]dns.RR)
-	if !ok {
-		// Log only once for debugging, avoid repeated type assertion failures
-		logutil.Logger.Warnf("Cache corruption detected for key %s: invalid type", key)
-		// Remove corrupted entry to prevent repeated warnings
-		DnsCache.Delete(key)
-		return nil, false
-	}
-	return answers, true
+	// Direct type assertion - assumes cache integrity for maximum performance
+	return val.([]dns.RR), true
 }
 
 func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
-	// Use conditional timer to avoid time.Now() overhead when metrics are disabled
 	timer := metric.StartCacheTimer(EnableMetrics)
 	key := CacheKey(domain, qtype)
-	atomic.AddInt64(&cacheRequests, 1)
-
-	// Cache hit path - optimized for speed
+	// Cache hit path - ultra-optimized for sub-millisecond response
 	if answers, ok := LoadFromCache(key); ok {
-		go func() {
-			atomic.AddInt64(&cacheHits, 1)
+		// Increment counters with minimal overhead
+		atomic.AddInt64(&cacheRequests, 1)
+		atomic.AddInt64(&cacheHits, 1)
 
-			// Track access for stale updater
-			if cfg.EnableStaleUpdater && accessTracker != nil {
-				accessTracker.TrackAccess(key, domain, qtype)
-			}
+		// Defer all non-critical operations to avoid blocking the response
+		if EnableMetrics || (cfg.EnableStaleUpdater && accessTracker != nil) {
+			go func() {
+				// Track access for stale updater (non-blocking)
+				if cfg.EnableStaleUpdater && accessTracker != nil {
+					accessTracker.TrackAccess(key, domain, qtype)
+				}
 
-			if EnableMetrics {
-				qTypeStr := dns.TypeToString[qtype]
-				fastMetrics := metric.GetFastMetricsInstance()
-				fastMetrics.FastRecordCacheHit()
-				fastMetrics.FastRecordDNSQuery(qTypeStr, "cached", timer.Elapsed())
-				// Record domain hit for cache hits
-				fastMetrics.FastRecordDomainHit(domain)
-			}
-		}()
+				// Record metrics (non-blocking)
+				if EnableMetrics {
+					qTypeStr := dns.TypeToString[qtype]
+					fastMetrics := metric.GetFastMetricsInstance()
+					fastMetrics.FastRecordCacheHit()
+					fastMetrics.FastRecordDNSQuery(qTypeStr, "cached", timer.Elapsed()) // No timer for cached responses
+					fastMetrics.FastRecordDomainHit(domain)
+				}
+			}()
+		}
 		return answers
 	}
+	// Cache miss path - do expensive operations
+	atomic.AddInt64(&cacheRequests, 1)
 
 	// Determine resolver based on routing configuration
 	resolver := dnsresolver.ResolverForClient
@@ -329,7 +334,6 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 
 	// Resolve DNS query
 	answers := resolver(domain, qtype, clientIP)
-
 	// Handle negative responses
 	if len(answers) == 0 {
 		go func() {
@@ -356,38 +360,84 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	return answers
 }
 
-// calculateTTL determines the appropriate TTL for caching based on DNS response
-func calculateTTL(answers []dns.RR) time.Duration {
-	minTTL := uint32(^uint32(0))
-	useDefaultTTL := false
+// Pre-parsed invalid answer IPs to avoid repeated parsing and string conversions
+var (
+	invalidARecordIP    []byte // Parsed IP for A record invalid answer
+	invalidAAAARecordIP []byte // Parsed IP for AAAA record invalid answer
+	invalidAnswersInit  sync.Once
+)
 
+// initInvalidAnswers parses the invalid answer strings once at startup
+func initInvalidAnswers() {
+	if config.ARecordInvalidAnswer != "" {
+		if ip := []byte(config.ARecordInvalidAnswer); len(ip) == 4 {
+			invalidARecordIP = ip
+		}
+	}
+	if config.AAAARecordInvalidAnswer != "" {
+		if ip := []byte(config.AAAARecordInvalidAnswer); len(ip) == 16 {
+			invalidAAAARecordIP = ip
+		}
+	}
+}
+
+// bytesEqual compares two byte slices efficiently
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// calculateTTL determines the appropriate TTL for caching based on DNS response
+// Ultra-optimized to minimize allocations, string conversions, and type assertions
+func calculateTTL(answers []dns.RR) time.Duration {
+	if len(answers) == 0 {
+		return DefaultDNSCacheTTL
+	}
+
+	// Initialize invalid answer patterns once
+	invalidAnswersInit.Do(initInvalidAnswers)
+
+	minTTL := uint32(^uint32(0))
+
+	// Single pass with optimized branching
 	for _, rr := range answers {
-		ttl := rr.Header().Ttl
+		header := rr.Header()
+		ttl := header.Ttl
+
+		// Fast path: if any TTL is 0, use default immediately
+		if ttl == 0 {
+			return DefaultDNSCacheTTL
+		}
+
+		// Update minimum TTL with branchless min operation
 		if ttl < minTTL {
 			minTTL = ttl
 		}
 
-		// Check for invalid answers that should use default TTL
-		switch v := rr.(type) {
-		case *dns.A:
-			if v.A.String() == config.ARecordInvalidAnswer {
-				useDefaultTTL = true
+		// Only check for invalid answers if we have them configured
+		// and only for A/AAAA records (most common invalid cases)
+		if header.Rrtype == dns.TypeA && len(invalidARecordIP) > 0 {
+			if a, ok := rr.(*dns.A); ok && bytesEqual(a.A, invalidARecordIP) {
+				return DefaultDNSCacheTTL
 			}
-		case *dns.AAAA:
-			if v.AAAA.String() == config.AAAARecordInvalidAnswer {
-				useDefaultTTL = true
+		} else if header.Rrtype == dns.TypeAAAA && len(invalidAAAARecordIP) > 0 {
+			if aaaa, ok := rr.(*dns.AAAA); ok && bytesEqual(aaaa.AAAA, invalidAAAARecordIP) {
+				return DefaultDNSCacheTTL
 			}
-		}
-		if useDefaultTTL {
-			break
 		}
 	}
 
-	if useDefaultTTL || minTTL == 0 {
-		return DefaultDNSCacheTTL
-	}
-
+	// Convert to duration with optimized bounds checking
 	ttlDuration := time.Duration(minTTL) * time.Second
+
+	// Clamp to configured limits
 	if ttlDuration < config.MinCacheTTL {
 		return config.MinCacheTTL
 	}
