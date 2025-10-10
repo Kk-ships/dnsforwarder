@@ -299,27 +299,24 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 
 	// Cache hit path - optimized for speed
 	if answers, ok := LoadFromCache(key); ok {
-		atomic.AddInt64(&cacheHits, 1)
+		go func() {
+			atomic.AddInt64(&cacheHits, 1)
 
-		// Track access for stale updater
-		if cfg.EnableStaleUpdater && accessTracker != nil {
-			accessTracker.TrackAccess(key, domain, qtype)
-		}
+			// Track access for stale updater
+			if cfg.EnableStaleUpdater && accessTracker != nil {
+				accessTracker.TrackAccess(key, domain, qtype)
+			}
 
-		if EnableMetrics {
-			qTypeStr := dns.TypeToString[qtype]
-			fastMetrics := metric.GetFastMetricsInstance()
-			fastMetrics.FastRecordCacheHit()
-			fastMetrics.FastRecordDNSQuery(qTypeStr, "cached", timer.Elapsed())
-			// Record domain hit for cache hits
-			fastMetrics.FastRecordDomainHit(domain)
-		}
+			if EnableMetrics {
+				qTypeStr := dns.TypeToString[qtype]
+				fastMetrics := metric.GetFastMetricsInstance()
+				fastMetrics.FastRecordCacheHit()
+				fastMetrics.FastRecordDNSQuery(qTypeStr, "cached", timer.Elapsed())
+				// Record domain hit for cache hits
+				fastMetrics.FastRecordDomainHit(domain)
+			}
+		}()
 		return answers
-	}
-
-	// Cache miss path
-	if EnableMetrics {
-		metric.GetFastMetricsInstance().FastRecordCacheMiss()
 	}
 
 	// Determine resolver based on routing configuration
@@ -335,23 +332,27 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 
 	// Handle negative responses
 	if len(answers) == 0 {
-		SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
-		if EnableMetrics {
-			qTypeStr := dns.TypeToString[qtype]
-			metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "nxdomain", timer.Elapsed())
-		}
+		go func() {
+			SaveToCache(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
+			if EnableMetrics {
+				qTypeStr := dns.TypeToString[qtype]
+				metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "nxdomain", timer.Elapsed())
+				metric.GetFastMetricsInstance().FastRecordCacheMiss()
+			}
+		}()
 		return answers
 	}
 
-	// Calculate TTL for positive responses
-	ttl := calculateTTL(answers)
-
-	// Cache positive responses
-	SaveToCache(key, answers, ttl)
-	if EnableMetrics {
-		qTypeStr := dns.TypeToString[qtype]
-		metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "success", timer.Elapsed())
-	}
+	go func() {
+		// Calculate TTL for positive responses
+		ttl := calculateTTL(answers)
+		// Cache positive responses
+		SaveToCache(key, answers, ttl)
+		if EnableMetrics {
+			qTypeStr := dns.TypeToString[qtype]
+			metric.GetFastMetricsInstance().FastRecordDNSQuery(qTypeStr, "success", timer.Elapsed())
+		}
+	}()
 	return answers
 }
 
