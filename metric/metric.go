@@ -223,8 +223,10 @@ func GetMemoryUsage() uint64 {
 }
 
 func updateSystemMetrics() {
-	goroutineCount.Set(float64(GetGoroutineCount()))
-	memoryUsage.Set(float64(GetMemoryUsage()))
+	// Optimized: fetch both metrics in a single call to reduce lock overhead
+	goroutines, memUsage := systemMetricsCache.GetBothMetrics()
+	goroutineCount.Set(float64(goroutines))
+	memoryUsage.Set(float64(memUsage))
 
 	// Update device IP DNS query metrics from FastMetricsRecorder
 	if fastMetricsInstance != nil {
