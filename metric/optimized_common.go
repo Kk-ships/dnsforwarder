@@ -127,11 +127,21 @@ type SystemMetricsCache struct {
 func NewSystemMetricsCache(cacheDuration time.Duration,
 	getGoroutines func() int,
 	getMemory func() uint64) *SystemMetricsCache {
-	return &SystemMetricsCache{
+	cache := &SystemMetricsCache{
 		cacheDuration:       cacheDuration,
 		getGoroutineCountFn: getGoroutines,
 		getMemoryUsageFn:    getMemory,
 	}
+	// Initialize the cache immediately to avoid returning 0 values
+	cache.updateCache()
+	return cache
+}
+
+// updateCache updates both goroutine and memory metrics together
+func (s *SystemMetricsCache) updateCache() {
+	s.cachedGoroutines = s.getGoroutineCountFn()
+	s.cachedMemoryUsage = s.getMemoryUsageFn()
+	s.lastUpdate = time.Now()
 }
 
 func (s *SystemMetricsCache) GetGoroutineCount() int {
@@ -151,8 +161,8 @@ func (s *SystemMetricsCache) GetGoroutineCount() int {
 		return s.cachedGoroutines
 	}
 
-	s.cachedGoroutines = s.getGoroutineCountFn()
-	s.lastUpdate = time.Now()
+	// Update both metrics together to keep them in sync
+	s.updateCache()
 	return s.cachedGoroutines
 }
 
@@ -173,8 +183,8 @@ func (s *SystemMetricsCache) GetMemoryUsage() uint64 {
 		return s.cachedMemoryUsage
 	}
 
-	s.cachedMemoryUsage = s.getMemoryUsageFn()
-	s.lastUpdate = time.Now()
+	// Update both metrics together to keep them in sync
+	s.updateCache()
 	return s.cachedMemoryUsage
 }
 

@@ -144,7 +144,7 @@ func init() {
 			// Use optimized memory stats with pooling
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
-			return m.Alloc
+			return m.Sys
 		},
 	)
 
