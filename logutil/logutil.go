@@ -23,7 +23,7 @@ var (
 	cfg = config.Get()
 	// Byte slice pool to reduce allocations - stores pointers to avoid SA6002
 	bytePool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			buf := make([]byte, 0, 1024)
 			return &buf
 		},

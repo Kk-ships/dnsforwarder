@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,7 +32,7 @@ func BenchmarkCacheHit(b *testing.B) {
 	}
 
 	testKey := CacheKey("example.com", 1)
-	SaveToCache(testKey, testAnswers, 5*time.Minute)
+	DnsCache.Set(testKey, testAnswers, 5*time.Minute)
 
 	b.ResetTimer()
 
@@ -86,7 +85,7 @@ func BenchmarkFastLoadFromCache(b *testing.B) {
 	}
 
 	testKey := "example.com:1"
-	SaveToCache(testKey, testAnswers, 5*time.Minute)
+	DnsCache.Set(testKey, testAnswers, 5*time.Minute)
 
 	b.ResetTimer()
 
@@ -128,7 +127,7 @@ func BenchmarkCacheHitWithMetrics(b *testing.B) {
 	}
 
 	testKey := CacheKey("benchmark.com", 1)
-	SaveToCache(testKey, testAnswers, 5*time.Minute)
+	DnsCache.Set(testKey, testAnswers, 5*time.Minute)
 
 	b.Run("WithoutMetrics", func(b *testing.B) {
 		EnableMetrics = false
@@ -218,24 +217,6 @@ func BenchmarkCalculateTTL(b *testing.B) {
 		emptyAnswers := []dns.RR{}
 		for i := 0; i < b.N; i++ {
 			_ = calculateTTL(emptyAnswers)
-		}
-	})
-}
-
-// BenchmarkAtomicOperations measures the cost of atomic operations
-func BenchmarkAtomicOperations(b *testing.B) {
-	var counter int64
-
-	b.Run("SingleAtomic", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			atomic.AddInt64(&counter, 1)
-		}
-	})
-
-	b.Run("DoubleAtomic", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			atomic.AddInt64(&counter, 1)
-			atomic.AddInt64(&cacheHits, 1)
 		}
 	})
 }

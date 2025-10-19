@@ -20,17 +20,17 @@ var (
 
 	// Object pools to reduce allocations
 	stringBuilderPool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return &strings.Builder{}
 		},
 	}
 	byteBufferPool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			return &bytes.Buffer{}
 		},
 	}
 	stringSlicePool = sync.Pool{
-		New: func() interface{} {
+		New: func() any {
 			slice := make([]string, 0, 8) // Pre-allocate for common case
 			return &slice
 		},

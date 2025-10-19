@@ -80,9 +80,7 @@ func performHealthCheck(server, testDomain string, dnsClient *dns.Client, dnsMsg
 
 	m.SetQuestion(testDomain, dns.TypeA)
 	m.RecursionDesired = true
-
 	_, rtt, err := dnsClient.Exchange(m, server)
-
 	return serverHealthCheckResult{
 		server:      server,
 		isReachable: err == nil,
@@ -103,7 +101,8 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	}
 
 	upstreamServerCount := len(servers)
-	if cfg.EnableMetrics {
+	enableMetrics := cfg.EnableMetrics
+	if enableMetrics {
 		metricsRecorder.SetUpstreamServersTotal(upstreamServerCount)
 	}
 
@@ -142,7 +141,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 
 			if !result.isReachable {
 				logutil.Logger.Warnf("server %s is not reachable: %v", svr, result.err)
-				if cfg.EnableMetrics {
+				if enableMetrics {
 					metricsRecorder.SetUpstreamServerReachable(svr, false)
 					metricsRecorder.RecordUpstreamQuery(svr, "error", result.rtt)
 					metricsRecorder.RecordError("upstream_unreachable", "health_check")
@@ -150,7 +149,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 				return
 			}
 
-			if cfg.EnableMetrics {
+			if enableMetrics {
 				metricsRecorder.SetUpstreamServerReachable(svr, true)
 				metricsRecorder.RecordUpstreamQuery(svr, "success", result.rtt)
 			}
@@ -170,7 +169,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 
 	wg.Wait()
 	if len(reachablePrivate)+len(reachablePublic) == 0 {
-		if cfg.EnableMetrics {
+		if enableMetrics {
 			metricsRecorder.RecordError("no_reachable_servers", "health_check")
 		}
 		logutil.Logger.Warn("No reachable DNS servers found")
@@ -186,14 +185,10 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 func GetServersForClient(clientIP string, cacheMutex *sync.RWMutex) (privateServers []string, publicServers []string) {
 	if clientrouting.ShouldUsePublicServers(clientIP) {
 		cacheMutex.RLock()
+		defer cacheMutex.RUnlock()
 		if len(PublicServersCache) > 0 {
-			// Create copy to avoid holding lock while returning
-			servers := make([]string, len(PublicServersCache))
-			copy(servers, PublicServersCache)
-			cacheMutex.RUnlock()
-			return []string{}, servers
+			return []string{}, copyServers(PublicServersCache)
 		}
-		cacheMutex.RUnlock()
 		return []string{}, PublicServersFallback
 	}
 
@@ -204,14 +199,17 @@ func GetServersForClient(clientIP string, cacheMutex *sync.RWMutex) (privateServ
 		return []string{}, PrivateAndPublicFallback
 	}
 
-	// Create copies to avoid returning references to internal slices
-	privateServers = make([]string, len(PrivateServersCache))
-	copy(privateServers, PrivateServersCache)
+	return copyServers(PrivateServersCache), copyServers(PublicServersCache)
+}
 
-	publicServers = make([]string, len(PublicServersCache))
-	copy(publicServers, PublicServersCache)
-
-	return privateServers, publicServers
+// copyServers creates a copy of the server slice to avoid returning references to internal slices
+func copyServers(servers []string) []string {
+	if len(servers) == 0 {
+		return []string{}
+	}
+	result := make([]string, len(servers))
+	copy(result, servers)
+	return result
 }
 
 // categorizeServer returns (isPrivate, isPublic) to avoid multiple map lookups
@@ -219,8 +217,6 @@ func categorizeServer(server string) (isPrivate, isPublic bool) {
 	_, isPrivate = PrivateServersSet[server]
 	if !isPrivate {
 		_, isPublic = PublicServersSet[server]
-	} else {
-		isPublic = false // Explicitly set to false if it's private
 	}
 	return isPrivate, isPublic
 }
