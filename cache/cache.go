@@ -13,6 +13,7 @@ package cache
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -333,14 +334,22 @@ var (
 
 // initInvalidAnswers parses the invalid answer strings once at startup
 func initInvalidAnswers() {
-	if config.ARecordInvalidAnswer != "" {
-		if ip := []byte(config.ARecordInvalidAnswer); len(ip) == 4 {
-			invalidARecordIP = ip
+	if s := config.ARecordInvalidAnswer; s != "" {
+		if ip := net.ParseIP(s); ip != nil {
+			if ip4 := ip.To4(); ip4 != nil {
+				// Copy the parsed IPv4 address (4 bytes)
+				invalidARecordIP = append([]byte(nil), ip4...)
+			}
 		}
 	}
-	if config.AAAARecordInvalidAnswer != "" {
-		if ip := []byte(config.AAAARecordInvalidAnswer); len(ip) == 16 {
-			invalidAAAARecordIP = ip
+	if s := config.AAAARecordInvalidAnswer; s != "" {
+		if ip := net.ParseIP(s); ip != nil {
+			// To16() returns 16 bytes for both IPv4 and IPv6
+			// Ensure it's actually IPv6 by checking To4() returns nil
+			if ip16 := ip.To16(); ip16 != nil && ip.To4() == nil {
+				// Copy the parsed IPv6 address (16 bytes)
+				invalidAAAARecordIP = append([]byte(nil), ip16...)
+			}
 		}
 	}
 }
@@ -367,8 +376,7 @@ func calculateTTL(answers []dns.RR) time.Duration {
 
 	// Initialize invalid answer patterns once
 	invalidAnswersInit.Do(initInvalidAnswers)
-
-	minTTL := uint32(^uint32(0))
+	var minTTL = config.MinTTL
 
 	// Single pass with optimized branching
 	for _, rr := range answers {
@@ -381,7 +389,7 @@ func calculateTTL(answers []dns.RR) time.Duration {
 		}
 
 		// Update minimum TTL with branchless min operation
-		if ttl < minTTL {
+		if ttl < config.MinTTL {
 			minTTL = ttl
 		}
 

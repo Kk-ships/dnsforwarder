@@ -64,7 +64,7 @@ LOG_LEVEL=info
 ## Client-Based DNS Routing Configuration
 - **ENABLE_CLIENT_ROUTING:** Enable client-based DNS routing (default `false`).
 - **PUBLIC_ONLY_CLIENTS:** Comma-separated list of client IPs that should only use public DNS servers.
-- **PUBLIC_ONLY_CLIENTS_MAC** Comma-separated list of client MAC addresses that should only use public DNS servers.
+- **PUBLIC_ONLY_CLIENT_MACS** Comma-separated list of client MAC addresses that should only use public DNS servers.
 
 ## Domain Routing Configuration
 - **ENABLE_DOMAIN_ROUTING:** Enable domain routing (default `false`).

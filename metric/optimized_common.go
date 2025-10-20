@@ -138,8 +138,8 @@ type SystemMetricsCache struct {
 	mu                  sync.Mutex
 	lastUpdateNanos     int64 // Use atomic int64 for lock-free timestamp checks
 	cacheDurationNanos  int64
-	cachedGoroutines    int
-	cachedMemoryUsage   uint64
+	cachedGoroutines    int32  // Use int32 for atomic operations (atomic.LoadInt32/StoreInt32)
+	cachedMemoryUsage   uint64 // Use atomic operations (atomic.LoadUint64/StoreUint64)
 	getGoroutineCountFn func() int
 	getMemoryUsageFn    func() uint64
 }
@@ -160,8 +160,10 @@ func NewSystemMetricsCache(cacheDuration time.Duration,
 // updateCacheLocked updates both goroutine and memory metrics together
 // Caller must hold the mutex
 func (s *SystemMetricsCache) updateCacheLocked() {
-	s.cachedGoroutines = s.getGoroutineCountFn()
-	s.cachedMemoryUsage = s.getMemoryUsageFn()
+	// Use atomic stores to ensure visibility across goroutines
+	atomic.StoreInt32(&s.cachedGoroutines, int32(s.getGoroutineCountFn()))
+	atomic.StoreUint64(&s.cachedMemoryUsage, s.getMemoryUsageFn())
+	// Store timestamp last to establish happens-before relationship
 	atomic.StoreInt64(&s.lastUpdateNanos, time.Now().UnixNano())
 }
 
@@ -174,9 +176,8 @@ func (s *SystemMetricsCache) isCacheFresh() bool {
 func (s *SystemMetricsCache) GetGoroutineCount() int {
 	// Fast path: lock-free check if cache is fresh
 	if s.isCacheFresh() {
-		// Note: reading int is atomic on most platforms, but not guaranteed
-		// For absolute correctness, we could use atomic.LoadInt32 with int32
-		return s.cachedGoroutines
+		// Use atomic load for thread-safe reading
+		return int(atomic.LoadInt32(&s.cachedGoroutines))
 	}
 
 	// Slow path: need to update cache
@@ -185,20 +186,19 @@ func (s *SystemMetricsCache) GetGoroutineCount() int {
 
 	// Double-check after acquiring lock
 	if s.isCacheFresh() {
-		return s.cachedGoroutines
+		return int(atomic.LoadInt32(&s.cachedGoroutines))
 	}
 
 	// Update both metrics together to keep them in sync
 	s.updateCacheLocked()
-	return s.cachedGoroutines
+	return int(atomic.LoadInt32(&s.cachedGoroutines))
 }
 
 func (s *SystemMetricsCache) GetMemoryUsage() uint64 {
 	// Fast path: lock-free check if cache is fresh
 	if s.isCacheFresh() {
-		// Note: uint64 reads may not be atomic on 32-bit systems
-		// For better portability, consider atomic.LoadUint64
-		return s.cachedMemoryUsage
+		// Use atomic load for thread-safe reading (critical on 32-bit systems)
+		return atomic.LoadUint64(&s.cachedMemoryUsage)
 	}
 
 	// Slow path: need to update cache
@@ -207,19 +207,20 @@ func (s *SystemMetricsCache) GetMemoryUsage() uint64 {
 
 	// Double-check after acquiring lock
 	if s.isCacheFresh() {
-		return s.cachedMemoryUsage
+		return atomic.LoadUint64(&s.cachedMemoryUsage)
 	}
 
 	// Update both metrics together to keep them in sync
 	s.updateCacheLocked()
-	return s.cachedMemoryUsage
+	return atomic.LoadUint64(&s.cachedMemoryUsage)
 }
 
 // GetBothMetrics returns both metrics in a single call, reducing lock overhead
 func (s *SystemMetricsCache) GetBothMetrics() (goroutines int, memoryUsage uint64) {
 	// Fast path: lock-free check if cache is fresh
 	if s.isCacheFresh() {
-		return s.cachedGoroutines, s.cachedMemoryUsage
+		// Use atomic loads for thread-safe reading
+		return int(atomic.LoadInt32(&s.cachedGoroutines)), atomic.LoadUint64(&s.cachedMemoryUsage)
 	}
 
 	// Slow path: need to update cache
@@ -231,7 +232,8 @@ func (s *SystemMetricsCache) GetBothMetrics() (goroutines int, memoryUsage uint6
 		s.updateCacheLocked()
 	}
 
-	return s.cachedGoroutines, s.cachedMemoryUsage
+	// Use atomic loads even with lock held for consistency
+	return int(atomic.LoadInt32(&s.cachedGoroutines)), atomic.LoadUint64(&s.cachedMemoryUsage)
 }
 
 // Process individual metric update - centralized processing logic

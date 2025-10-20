@@ -26,6 +26,9 @@ const (
 	SuffixTXT   = ":16"
 )
 
+// used for TTL calculations
+const MinTTL = uint32(^uint32(0))
+
 // Config holds all application configuration
 type Config struct {
 	// DNS Server Configuration

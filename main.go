@@ -95,14 +95,12 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: domain routing initialized")
 	clientrouting.InitializeClientRouting()
 	logutil.Logger.Debug("StartDNSServer: client routing initialized")
-	// Start background services sequentially to avoid log corruption
+
+	// Start background services (each already spawns goroutines internally)
 	cache.StartCacheStatsLogger()
-	time.Sleep(10 * time.Millisecond) // Small delay to ensure logger is ready
 	if cfg.EnableMetrics {
-		go metric.StartMetricsServer()
-		time.Sleep(10 * time.Millisecond)
-		go metric.StartMetricsUpdater()
-		time.Sleep(10 * time.Millisecond)
+		metric.StartMetricsServer()
+		metric.StartMetricsUpdater()
 		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", cfg.MetricsPort)
 	}
 
