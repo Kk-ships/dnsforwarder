@@ -10,15 +10,23 @@ import (
 	"github.com/miekg/dns"
 )
 
+// ServerType represents the category of DNS server
+type ServerType uint8
+
+const (
+	ServerTypeUnknown ServerType = iota
+	ServerTypePrivate
+	ServerTypePublic
+)
+
 var (
 	CacheLastUpdated         time.Time
 	CacheMutex               sync.RWMutex
-	PrivateAndPublicFallback []string                    // Combined list of private and public servers
-	PrivateServersSet        = make(map[string]struct{}) // Set of private DNS servers for fast lookup
-	PublicServersSet         = make(map[string]struct{}) // Set of public DNS servers for fast lookup
-	PublicServersFallback    []string                    // Copy of public servers for fallback
-	PrivateServersCache      []string                    // Cache for private servers which are healthy
-	PublicServersCache       []string                    // Cache for public servers which are healthy
+	PrivateAndPublicFallback []string                      // Combined list of private and public servers
+	serverTypeMap            = make(map[string]ServerType) // Single map for O(1) server type lookup
+	PublicServersFallback    []string                      // Copy of public servers for fallback
+	PrivateServersCache      []string                      // Cache for private servers which are healthy
+	PublicServersCache       []string                      // Cache for public servers which are healthy
 	cfg                      = config.Get()
 )
 
@@ -30,8 +38,17 @@ type metricsRecorderInterface interface {
 }
 
 func InitDNSSource(metricsRecorder metricsRecorderInterface) {
-	addServersToSet(cfg.PrivateServers, PrivateServersSet)
-	addServersToSet(cfg.PublicServers, PublicServersSet)
+	// Build single server type map - one lookup instead of two
+	for _, s := range cfg.PrivateServers {
+		if s != "" {
+			serverTypeMap[s] = ServerTypePrivate
+		}
+	}
+	for _, s := range cfg.PublicServers {
+		if s != "" {
+			serverTypeMap[s] = ServerTypePublic
+		}
+	}
 
 	// Pre-allocate with exact capacity to avoid reallocations
 	totalCapacity := len(cfg.PrivateServers) + len(cfg.PublicServers)
@@ -47,16 +64,6 @@ func InitDNSSource(metricsRecorder metricsRecorderInterface) {
 	logutil.Logger.Infof("Public servers: %v", cfg.PublicServers)
 	logutil.Logger.Infof("Combined servers: %v", PrivateAndPublicFallback)
 	logutil.Logger.Debug("InitDNSSource: end")
-}
-
-func addServersToSet(servers []string, set map[string]struct{}) {
-	// Pre-filter empty strings to avoid unnecessary map operations
-	for _, s := range servers {
-		if s != "" {
-			set[s] = struct{}{}
-		}
-	}
-	logutil.Logger.Debugf("addServersToSet: end, set=%v", set)
 }
 
 // GetDNSServers returns the list of DNS servers from environment or config which can be used for DNS queries.
@@ -212,11 +219,9 @@ func copyServers(servers []string) []string {
 	return result
 }
 
-// categorizeServer returns (isPrivate, isPublic) to avoid multiple map lookups
+// categorizeServer returns (isPrivate, isPublic) using single map lookup
+// Optimized: O(1) with single map access instead of two separate map lookups
 func categorizeServer(server string) (isPrivate, isPublic bool) {
-	_, isPrivate = PrivateServersSet[server]
-	if !isPrivate {
-		_, isPublic = PublicServersSet[server]
-	}
-	return isPrivate, isPublic
+	serverType := serverTypeMap[server]
+	return serverType == ServerTypePrivate, serverType == ServerTypePublic
 }
