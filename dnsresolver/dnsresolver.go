@@ -3,6 +3,7 @@ package dnsresolver
 import (
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/dnssource"
+
 	"dnsloadbalancer/domainrouting"
 	"dnsloadbalancer/logutil"
 	"sync/atomic"
@@ -18,8 +19,8 @@ import (
 var (
 	dnsUsageStats = make(map[string]*int64) // Changed to atomic counters
 	statsMutex    sync.RWMutex              // Use RWMutex for better read performance
-	dnsMsgPool    = sync.Pool{New: func() interface{} { return new(dns.Msg) }}
-	dnsClientPool = sync.Pool{New: func() interface{} {
+	dnsMsgPool    = sync.Pool{New: func() any { return new(dns.Msg) }}
+	dnsClientPool = sync.Pool{New: func() any {
 		return &dns.Client{
 			Timeout: config.Get().DNSTimeout,
 			Net:     "udp",
@@ -76,8 +77,7 @@ func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQuery(domain, qtype)
 	defer PutDNSMsg(m)
 	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
-	result := upstreamDNSQuery(privateServers, publicServers, m)
-	return result
+	return upstreamDNSQuery(privateServers, publicServers, m)
 }
 
 func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
@@ -87,8 +87,8 @@ func ResolverForDomain(domain string, qtype uint16, clientIP string) []dns.RR {
 		result := upstreamDNSQuery([]string{svr}, []string{}, m)
 		return result
 	}
-	result := ResolverForClient(domain, qtype, clientIP)
-	return result
+	return ResolverForClient(domain, qtype, clientIP)
+
 }
 
 func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Msg) []dns.RR {

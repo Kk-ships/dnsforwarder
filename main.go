@@ -95,11 +95,12 @@ func StartDNSServer() {
 	logutil.Logger.Debug("StartDNSServer: domain routing initialized")
 	clientrouting.InitializeClientRouting()
 	logutil.Logger.Debug("StartDNSServer: client routing initialized")
-	// Start cache stats and metrics logging in background
+
+	// Start background services (each already spawns goroutines internally)
 	cache.StartCacheStatsLogger()
 	if cfg.EnableMetrics {
-		go metric.StartMetricsServer()
-		go metric.StartMetricsUpdater()
+		metric.StartMetricsServer()
+		metric.StartMetricsUpdater()
 		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", cfg.MetricsPort)
 	}
 
@@ -112,7 +113,7 @@ func StartDNSServer() {
 		UDPSize:   cfg.UDPSize,
 		ReusePort: true,
 	}
-	logutil.Logger.Infof("Starting DNS server on port 53 (UDP)")
+	logutil.Logger.Infof("Starting DNS server on port %s (UDP size: %d bytes)...", cfg.DNSPort, cfg.UDPSize)
 	// --- Server Execution ---
 	errCh := make(chan error, 1)
 	go func() {

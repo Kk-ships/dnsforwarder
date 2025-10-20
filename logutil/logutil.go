@@ -12,22 +12,15 @@ import (
 
 const (
 	// Buffer size for log messages
-	logBufferSize = 1000
+	logBufferSize = 10000
 	// Timeout for flushing logs on shutdown
 	flushTimeout = 5 * time.Second
 	// Batch size for processing messages
-	batchSize = 10
+	batchSize = 50
 )
 
 var (
 	cfg = config.Get()
-	// Byte slice pool to reduce allocations - stores pointers to avoid SA6002
-	bytePool = sync.Pool{
-		New: func() interface{} {
-			buf := make([]byte, 0, 1024)
-			return &buf
-		},
-	}
 	// Log level map for faster lookups
 	logLevels = map[string]log.Level{
 		"debug": log.DebugLevel,
@@ -91,22 +84,10 @@ func (bw *bufferedWriter) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
-	// Get a byte slice pointer from the pool
-	bufPtr := bytePool.Get().(*[]byte)
-	defer bytePool.Put(bufPtr)
-
-	buf := *bufPtr
-	// Reset length but keep capacity
-	buf = buf[:0]
-
-	// Ensure we have enough capacity
-	if cap(buf) < len(p) {
-		buf = make([]byte, len(p))
-	} else {
-		buf = buf[:len(p)]
-	}
+	// Create a new copy of the data since we're sending it to a channel
+	// and the original slice might be reused by the caller
+	buf := make([]byte, len(p))
 	copy(buf, p)
-	*bufPtr = buf // Update the pointer's target
 
 	// Send to buffer channel (non-blocking with select and default case)
 	select {

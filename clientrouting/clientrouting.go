@@ -17,7 +17,7 @@ var (
 
 	// MAC address cache using go-cache
 	macCache    *cache.Cache
-	macCacheTTL = 5 * time.Minute // Cache MAC addresses for 5 minutes
+	macCacheTTL = 3 * time.Minute // Cache MAC addresses for 3 minutes
 	cfg         = config.Get()
 )
 

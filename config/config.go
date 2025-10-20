@@ -17,6 +17,18 @@ const (
 	DefaultPublicDNS           = "1.1.1.1:53"
 )
 
+// Pre-computed suffixes for common DNS types to avoid string operations
+const (
+	SuffixA     = ":1"
+	SuffixAAAA  = ":28"
+	SuffixCNAME = ":5"
+	SuffixMX    = ":15"
+	SuffixTXT   = ":16"
+)
+
+// used for TTL calculations
+const MinTTL = uint32(^uint32(0))
+
 // Config holds all application configuration
 type Config struct {
 	// DNS Server Configuration
