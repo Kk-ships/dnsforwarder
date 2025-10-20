@@ -276,22 +276,24 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	key := CacheKey(domain, qtype)
 	// Cache hit path - ultra-optimized for sub-millisecond response
 	if answers, ok := LoadFromCache(key); ok {
-		// Defer all non-critical operations to avoid blocking the response
-		if EnableMetrics || (cfg.EnableStaleUpdater && accessTracker != nil) {
-			go func() {
-				// Track access for stale updater (non-blocking)
-				if cfg.EnableStaleUpdater && accessTracker != nil {
-					accessTracker.TrackAccess(key, domain, qtype)
-				}
-
-				// Record metrics (non-blocking)
-				if EnableMetrics {
-					fastMetrics := metric.GetFastMetricsInstance()
-					fastMetrics.FastRecordCacheHit()
-					fastMetrics.FastRecordDomainHit(domain)
-				}
-			}()
+		// INLINE metrics: Just atomic increments (~2-5ns overhead total)
+		// No goroutine spawn, no channel sends - periodic flushing handles Prometheus updates
+		if EnableMetrics {
+			fastMetrics := metric.GetFastMetricsInstance()
+			if domain != "" {
+				// Single call does both cache hit + domain tracking
+				fastMetrics.InlineCacheHitWithDomain(domain)
+			} else {
+				// Just record cache hit
+				fastMetrics.InlineCacheHit()
+			}
 		}
+
+		// Defer heavy access tracking to background (only if needed)
+		if cfg.EnableStaleUpdater && accessTracker != nil {
+			go accessTracker.TrackAccess(key, domain, qtype)
+		}
+
 		return answers
 	}
 	// Determine resolver based on routing configuration

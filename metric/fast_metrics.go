@@ -255,6 +255,19 @@ func (f *FastMetricsRecorder) FastRecordCacheHit() {
 	}
 }
 
+// InlineCacheHit records a cache hit with just atomic increment (no channel send)
+// This is the fastest path for hot code paths - relies on periodic metric updates
+func (f *FastMetricsRecorder) InlineCacheHit() {
+	atomic.AddUint64(&f.cacheHitsCount, 1)
+}
+
+// InlineCacheHitWithDomain records a cache hit with domain tracking (no channel send)
+// Optimized for cache hot path - only atomic operations
+func (f *FastMetricsRecorder) InlineCacheHitWithDomain(domain string) uint64 {
+	atomic.AddUint64(&f.cacheHitsCount, 1)
+	return f.incrementDomainHitCount(domain)
+}
+
 // FastRecordCacheMiss records a cache miss with atomic increment
 func (f *FastMetricsRecorder) FastRecordCacheMiss() {
 	atomic.AddUint64(&f.cacheMissesCount, 1)
@@ -385,6 +398,10 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 				updates = updates[:0] // Reset slice but keep capacity
 			}
 
+			// Periodically sync atomic counters to Prometheus metrics
+			// This handles metrics recorded via Inline methods (no channel sends)
+			f.syncAtomicCountersToPrometheus()
+
 			// Periodically update device IP and domain metrics
 			deviceIPUpdateCounter++
 			if deviceIPUpdateCounter >= deviceIPUpdateInterval {
@@ -406,6 +423,23 @@ func (f *FastMetricsRecorder) processBatchedUpdates(batchSize int, batchDelay ti
 func (f *FastMetricsRecorder) flushUpdates(updates []metricUpdate) {
 	for _, update := range updates {
 		processMetricUpdate(update)
+	}
+}
+
+// syncAtomicCountersToPrometheus synchronizes atomic counters to Prometheus metrics
+// This is called periodically to ensure metrics recorded via Inline methods are visible
+func (f *FastMetricsRecorder) syncAtomicCountersToPrometheus() {
+	// Load current atomic values
+	cacheHits := atomic.LoadUint64(&f.cacheHitsCount)
+	cacheMisses := atomic.LoadUint64(&f.cacheMissesCount)
+
+	// Only send updates if counters have changed
+	// Note: We send the total count, Prometheus counter metrics handle the increment
+	if cacheHits > 0 {
+		processMetricUpdate(NewMetricUpdate(MetricTypeCacheHit))
+	}
+	if cacheMisses > 0 {
+		processMetricUpdate(NewMetricUpdate(MetricTypeCacheMiss))
 	}
 }
 

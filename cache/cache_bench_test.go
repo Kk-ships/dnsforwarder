@@ -37,7 +37,7 @@ func BenchmarkCacheHit(b *testing.B) {
 	b.ResetTimer()
 
 	// Measure cache hit performance
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		result := ResolverWithCache("example.com", 1, "192.168.1.100")
 		if len(result) == 0 {
 			b.Fatal("Expected cached result")
@@ -50,19 +50,19 @@ func BenchmarkCacheKeyGeneration(b *testing.B) {
 	domain := "example.com"
 
 	b.Run("A_Record", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = CacheKey(domain, 1) // A record
 		}
 	})
 
 	b.Run("AAAA_Record", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = CacheKey(domain, 28) // AAAA record
 		}
 	})
 
 	b.Run("Uncommon_Record", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = CacheKey(domain, 99) // Uncommon record type
 		}
 	})
@@ -90,16 +90,7 @@ func BenchmarkFastLoadFromCache(b *testing.B) {
 	b.ResetTimer()
 
 	b.Run("FastLoad", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			_, ok := LoadFromCache(testKey)
-			if !ok {
-				b.Fatal("Expected cache hit")
-			}
-		}
-	})
-
-	b.Run("RegularLoad", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_, ok := LoadFromCache(testKey)
 			if !ok {
 				b.Fatal("Expected cache hit")
@@ -134,7 +125,7 @@ func BenchmarkCacheHitWithMetrics(b *testing.B) {
 		cfg = &config.Config{EnableStaleUpdater: false}
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			result := ResolverWithCache("benchmark.com", 1, "10.0.0.1")
 			if len(result) == 0 {
 				b.Fatal("Expected cached result")
@@ -147,7 +138,7 @@ func BenchmarkCacheHitWithMetrics(b *testing.B) {
 		cfg = &config.Config{EnableStaleUpdater: false}
 
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			result := ResolverWithCache("benchmark.com", 1, "10.0.0.1")
 			if len(result) == 0 {
 				b.Fatal("Expected cached result")
@@ -202,20 +193,20 @@ func BenchmarkCalculateTTL(b *testing.B) {
 	}
 
 	b.Run("SingleAnswer", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = calculateTTL(testAnswersSingle)
 		}
 	})
 
 	b.Run("MultipleAnswers", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = calculateTTL(testAnswersMultiple)
 		}
 	})
 
 	b.Run("EmptyAnswers", func(b *testing.B) {
 		emptyAnswers := []dns.RR{}
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = calculateTTL(emptyAnswers)
 		}
 	})
