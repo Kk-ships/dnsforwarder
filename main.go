@@ -115,7 +115,7 @@ func StartDNSServer() {
 		UDPSize:   cfg.UDPSize,
 		ReusePort: true,
 	}
-	logutil.Logger.Infof("Starting DNS server on port 53 (UDP)")
+	logutil.Logger.Infof("Starting DNS server on port %s (UDP size: %d bytes)...", cfg.DNSPort, cfg.UDPSize)
 	// --- Server Execution ---
 	errCh := make(chan error, 1)
 	go func() {
