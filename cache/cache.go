@@ -128,23 +128,26 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	key := CacheKey(domain, qtype)
 	// Cache hit path - ultra-optimized for sub-millisecond response
 	if answers, ok := LoadFromCache(key); ok {
-		// INLINE metrics: Just atomic increments (~2-5ns overhead total)
-		// No goroutine spawn, no channel sends - periodic flushing handles Prometheus updates
-		if EnableMetrics {
-			fastMetrics := metric.GetFastMetricsInstance()
-			if domain != "" {
-				// Single call does both cache hit + domain tracking
-				fastMetrics.InlineCacheHitWithDomain(domain)
-			} else {
-				// Just record cache hit
-				fastMetrics.InlineCacheHit()
+		// Defer all heavy operations to run after returning response
+		defer func() {
+			// INLINE metrics: Just atomic increments (~2-5ns overhead total)
+			// No goroutine spawn, no channel sends - periodic flushing handles Prometheus updates
+			if EnableMetrics {
+				fastMetrics := metric.GetFastMetricsInstance()
+				if domain != "" {
+					// Single call does both cache hit + domain tracking
+					fastMetrics.InlineCacheHitWithDomain(domain)
+				} else {
+					// Just record cache hit
+					fastMetrics.InlineCacheHit()
+				}
 			}
-		}
 
-		// Defer heavy access tracking to background (only if needed)
-		if cfg.EnableStaleUpdater && accessTracker != nil {
-			defer accessTracker.TrackAccess(key, domain, qtype)
-		}
+			// Track access for stale cache updater (non-blocking)
+			if cfg.EnableStaleUpdater && accessTracker != nil {
+				accessTracker.TrackAccess(key, domain, qtype)
+			}
+		}()
 
 		return answers
 	}
@@ -158,7 +161,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 	answers := resolver(domain, qtype, clientIP)
 	// Handle negative responses
 	if len(answers) == 0 {
-		go func() {
+		// Defer cache write and metrics for negative responses
+		defer func() {
 			DnsCache.Set(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
 			if EnableMetrics {
 				metric.GetFastMetricsInstance().FastRecordCacheMiss()
@@ -167,7 +171,8 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 		return answers
 	}
 
-	go func() {
+	// Defer cache write with TTL calculation for positive responses
+	defer func() {
 		// Calculate TTL for positive responses
 		ttl := calculateTTL(answers)
 		// Cache positive responses
