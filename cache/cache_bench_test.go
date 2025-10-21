@@ -147,8 +147,8 @@ func BenchmarkCacheHitWithMetrics(b *testing.B) {
 	})
 }
 
-// BenchmarkCalculateTTL measures the performance of TTL calculation
-func BenchmarkCalculateTTL(b *testing.B) {
+// BenchmarkCalculateTTLDetailed measures the performance of TTL calculation with detailed scenarios
+func BenchmarkCalculateTTLDetailed(b *testing.B) {
 	// Create test DNS RR with different scenarios
 	testAnswersSingle := []dns.RR{
 		&dns.A{
