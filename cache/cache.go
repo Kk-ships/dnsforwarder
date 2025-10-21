@@ -143,7 +143,7 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 
 		// Defer heavy access tracking to background (only if needed)
 		if cfg.EnableStaleUpdater && accessTracker != nil {
-			go accessTracker.TrackAccess(key, domain, qtype)
+			defer accessTracker.TrackAccess(key, domain, qtype)
 		}
 
 		return answers

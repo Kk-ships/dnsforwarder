@@ -347,22 +347,23 @@ func TestStartStopCachePersistence(t *testing.T) {
 }
 
 func TestCacheSnapshot_Serialization(t *testing.T) {
+	now := time.Now()
 	snapshot := CacheSnapshot{
 		Entries: []CacheEntry{
 			{
 				Key:        "test.com:1",
 				Answers:    []string{"test.com.\t300\tIN\tA\t1.2.3.4"},
-				Expiration: time.Now().Add(5 * time.Minute),
+				Expiration: now.Add(5 * time.Minute),
 				AccessInfo: &AccessInfo{
-					AccessCount: 10,
-					LastAccess:  time.Now(),
-					FirstAccess: time.Now().Add(-1 * time.Hour),
-					Domain:      "test.com",
-					QueryType:   1,
+					AccessCount:      10,
+					LastAccessNanos:  now.UnixNano(),
+					FirstAccessNanos: now.Add(-1 * time.Hour).UnixNano(),
+					Domain:           "test.com",
+					QueryType:        1,
 				},
 			},
 		},
-		Timestamp: time.Now(),
+		Timestamp: now,
 	}
 
 	// Serialize

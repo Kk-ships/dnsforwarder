@@ -140,11 +140,11 @@ func SaveCacheToFile() error {
 			if ai, found := accessTracker.GetAccessInfo(key); found {
 				// Create a copy of access info for persistence
 				accessInfo = &AccessInfo{
-					AccessCount: atomic.LoadInt64(&ai.AccessCount),
-					LastAccess:  ai.LastAccess,
-					FirstAccess: ai.FirstAccess,
-					Domain:      ai.Domain,
-					QueryType:   ai.QueryType,
+					AccessCount:      atomic.LoadInt64(&ai.AccessCount),
+					LastAccessNanos:  atomic.LoadInt64(&ai.LastAccessNanos),
+					FirstAccessNanos: atomic.LoadInt64(&ai.FirstAccessNanos),
+					Domain:           ai.Domain,
+					QueryType:        ai.QueryType,
 				}
 			}
 		}
@@ -280,11 +280,11 @@ func LoadCacheFromFile() error {
 				// Restore access tracking information if available
 				if cfg.EnableStaleUpdater && accessTracker != nil && entry.AccessInfo != nil {
 					restoredAccessInfo := &AccessInfo{
-						AccessCount: entry.AccessInfo.AccessCount,
-						LastAccess:  entry.AccessInfo.LastAccess,
-						FirstAccess: entry.AccessInfo.FirstAccess,
-						Domain:      entry.AccessInfo.Domain,
-						QueryType:   entry.AccessInfo.QueryType,
+						AccessCount:      entry.AccessInfo.AccessCount,
+						LastAccessNanos:  entry.AccessInfo.LastAccessNanos,
+						FirstAccessNanos: entry.AccessInfo.FirstAccessNanos,
+						Domain:           entry.AccessInfo.Domain,
+						QueryType:        entry.AccessInfo.QueryType,
 					}
 					accessTracker.accessMap.Store(entry.Key, restoredAccessInfo)
 				}

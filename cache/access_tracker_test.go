@@ -30,8 +30,8 @@ func TestTrackAccess_NewEntry(t *testing.T) {
 	assert.Equal(t, int64(1), atomic.LoadInt64(&info.AccessCount))
 	assert.Equal(t, domain, info.Domain)
 	assert.Equal(t, qtype, info.QueryType)
-	assert.False(t, info.FirstAccess.IsZero())
-	assert.False(t, info.LastAccess.IsZero())
+	assert.False(t, info.FirstAccess().IsZero())
+	assert.False(t, info.LastAccess().IsZero())
 }
 
 func TestTrackAccess_ExistingEntry(t *testing.T) {
@@ -44,7 +44,7 @@ func TestTrackAccess_ExistingEntry(t *testing.T) {
 	tracker.TrackAccess(key, domain, qtype)
 	info1, found := tracker.GetAccessInfo(key)
 	require.True(t, found)
-	firstAccess := info1.FirstAccess
+	firstAccess := info1.FirstAccess()
 
 	// Small delay to ensure LastAccess changes
 	time.Sleep(10 * time.Millisecond)
@@ -55,8 +55,8 @@ func TestTrackAccess_ExistingEntry(t *testing.T) {
 	require.True(t, found)
 
 	assert.Equal(t, int64(2), atomic.LoadInt64(&info2.AccessCount))
-	assert.Equal(t, firstAccess, info2.FirstAccess)     // FirstAccess should not change
-	assert.True(t, info2.LastAccess.After(firstAccess)) // LastAccess should be updated
+	assert.Equal(t, firstAccess, info2.FirstAccess())     // FirstAccess should not change
+	assert.True(t, info2.LastAccess().After(firstAccess)) // LastAccess should be updated
 }
 
 func TestTrackAccess_Concurrent(t *testing.T) {
