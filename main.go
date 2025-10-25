@@ -52,6 +52,8 @@ func (h *dnsHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		if answers != nil {
 			msg.Answer = answers
 		} else {
+			// No answers available (e.g., no upstream servers reachable)
+			// Return empty response instead of crashing - allows graceful degradation
 			queryStatus = "no_answers" // DNS resolution didn't find answers
 		}
 	} else {

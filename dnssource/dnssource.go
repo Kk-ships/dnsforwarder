@@ -104,7 +104,10 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	servers := GetDNSServers() // Get all configured DNS servers
 	if len(servers) == 0 || (len(servers) == 1 && servers[0] == "") {
 		metricsRecorder.RecordError("no_dns_servers", "config")
-		logutil.Logger.Fatalf("No DNS servers found")
+		logutil.Logger.Errorf("No DNS servers found - continuing with empty cache")
+		// Don't crash the application, just log the error and continue
+		// This allows the application to stay running and potentially recover
+		return
 	}
 
 	upstreamServerCount := len(servers)

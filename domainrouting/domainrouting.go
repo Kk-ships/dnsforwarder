@@ -50,17 +50,20 @@ func InitializeDomainRouting() {
 	}
 	// Check if the domain routing folder is specified
 	if cfg.DomainRoutingFolder == "" {
-		logutil.Logger.Fatalf("Domain routing is enabled but no folder is specified")
+		logutil.Logger.Errorf("Domain routing is enabled but no folder is specified - disabling domain routing")
+		return
 	}
 	logutil.Logger.Infof("Domain routing enabled with folder: %v", cfg.DomainRoutingFolder)
 
 	// Initial load
 	table, err := loadRoutingTable(cfg.DomainRoutingFolder)
 	if err != nil {
-		logutil.Logger.Fatalf("Failed to load initial routing table: %v", err)
+		logutil.Logger.Errorf("Failed to load initial routing table: %v - disabling domain routing", err)
+		return
 	}
 	if len(table) == 0 {
-		logutil.Logger.Fatalf("No domain routing entries found in folder: %s", cfg.DomainRoutingFolder)
+		logutil.Logger.Errorf("No domain routing entries found in folder: %s - disabling domain routing", cfg.DomainRoutingFolder)
+		return
 	}
 	routingTablePtr.Store(&table)
 
