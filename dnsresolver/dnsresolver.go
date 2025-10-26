@@ -76,7 +76,7 @@ func prepareDNSQuery(domain string, qtype uint16) *dns.Msg {
 func ResolverForClient(domain string, qtype uint16, clientIP string) []dns.RR {
 	m := prepareDNSQuery(domain, qtype)
 	defer PutDNSMsg(m)
-	privateServers, publicServers := dnssource.GetServersForClient(clientIP, &dnssource.CacheMutex)
+	privateServers, publicServers := dnssource.GetServersForClient(clientIP)
 	return upstreamDNSQuery(privateServers, publicServers, m)
 }
 

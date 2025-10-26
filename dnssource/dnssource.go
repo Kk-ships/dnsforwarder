@@ -5,6 +5,7 @@ import (
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/logutil"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/miekg/dns"
@@ -19,15 +20,22 @@ const (
 	ServerTypePublic
 )
 
+// serverCache holds server lists for atomic swap
+type serverCache struct {
+	privateServers []string
+	publicServers  []string
+}
+
 var (
 	CacheLastUpdated         time.Time
-	CacheMutex               sync.RWMutex
 	PrivateAndPublicFallback []string                      // Combined list of private and public servers
 	serverTypeMap            = make(map[string]ServerType) // Single map for O(1) server type lookup
 	PublicServersFallback    []string                      // Copy of public servers for fallback
-	PrivateServersCache      []string                      // Cache for private servers which are healthy
-	PublicServersCache       []string                      // Cache for public servers which are healthy
-	cfg                      = config.Get()
+
+	// Use atomic.Value for lock-free reads of server caches
+	atomicServerCache atomic.Value // stores *serverCache
+
+	cfg = config.Get()
 )
 
 type metricsRecorderInterface interface {
@@ -59,6 +67,12 @@ func InitDNSSource(metricsRecorder metricsRecorderInterface) {
 	// Create a copy with proper capacity
 	PublicServersFallback = make([]string, len(cfg.PublicServers))
 	copy(PublicServersFallback, cfg.PublicServers)
+
+	// Initialize atomic server cache with empty lists
+	atomicServerCache.Store(&serverCache{
+		privateServers: []string{},
+		publicServers:  []string{},
+	})
 
 	logutil.Logger.Infof("Private servers: %v", cfg.PrivateServers)
 	logutil.Logger.Infof("Public servers: %v", cfg.PublicServers)
@@ -184,42 +198,41 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 		}
 		logutil.Logger.Warn("No reachable DNS servers found")
 	}
-	CacheMutex.Lock()
-	PrivateServersCache = reachablePrivate
-	PublicServersCache = reachablePublic
+
+	// Atomically swap the server cache - lock-free reads!
+	atomicServerCache.Store(&serverCache{
+		privateServers: reachablePrivate,
+		publicServers:  reachablePublic,
+	})
+
 	CacheLastUpdated = time.Now()
-	CacheMutex.Unlock()
 	logutil.Logger.Debug("UpdateDNSServersCache: end")
 }
 
-func GetServersForClient(clientIP string, cacheMutex *sync.RWMutex) (privateServers []string, publicServers []string) {
+func GetServersForClient(clientIP string) (privateServers []string, publicServers []string) {
+	// Lock-free read of server cache using atomic.Value
+	cacheVal := atomicServerCache.Load()
+	if cacheVal == nil {
+		// Cache not initialized yet, fall back to static configs
+		return []string{}, PrivateAndPublicFallback
+	}
+
+	cache := cacheVal.(*serverCache)
+
 	if clientrouting.ShouldUsePublicServers(clientIP) {
-		cacheMutex.RLock()
-		defer cacheMutex.RUnlock()
-		if len(PublicServersCache) > 0 {
-			return []string{}, copyServers(PublicServersCache)
+		if len(cache.publicServers) > 0 {
+			// Safe to return directly - slice is immutable once stored in atomic.Value
+			return []string{}, cache.publicServers
 		}
 		return []string{}, PublicServersFallback
 	}
 
-	cacheMutex.RLock()
-	defer cacheMutex.RUnlock()
-
-	if len(PrivateServersCache) == 0 && len(PublicServersCache) == 0 {
+	if len(cache.privateServers) == 0 && len(cache.publicServers) == 0 {
 		return []string{}, PrivateAndPublicFallback
 	}
 
-	return copyServers(PrivateServersCache), copyServers(PublicServersCache)
-}
-
-// copyServers creates a copy of the server slice to avoid returning references to internal slices
-func copyServers(servers []string) []string {
-	if len(servers) == 0 {
-		return []string{}
-	}
-	result := make([]string, len(servers))
-	copy(result, servers)
-	return result
+	// Safe to return directly - slices are immutable once stored in atomic.Value
+	return cache.privateServers, cache.publicServers
 }
 
 // categorizeServer returns (isPrivate, isPublic) using single map lookup
