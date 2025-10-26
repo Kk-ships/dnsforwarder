@@ -159,25 +159,27 @@ func ResolverWithCache(domain string, qtype uint16, clientIP string) []dns.RR {
 
 	// Resolve DNS query
 	answers := resolver(domain, qtype, clientIP)
-	// Handle negative responses
-	if len(answers) == 0 {
-		// Defer cache write and metrics for negative responses
-		defer func() {
-			DnsCache.Set(key, answers, DefaultDNSCacheTTL/config.NegativeResponseTTLDivisor)
-			if EnableMetrics {
-				metric.GetFastMetricsInstance().FastRecordCacheMiss()
-			}
-		}()
-		return answers
-	}
 
-	// Defer cache write with TTL calculation for positive responses
+	// Defer cache write and metrics for all cache misses
 	defer func() {
-		// Calculate TTL for positive responses
-		ttl := calculateTTL(answers)
-		// Cache positive responses
+		var ttl time.Duration
+		if len(answers) == 0 {
+			// Shorter TTL for negative responses
+			ttl = DefaultDNSCacheTTL / config.NegativeResponseTTLDivisor
+		} else {
+			// Calculate TTL for positive responses
+			ttl = calculateTTL(answers)
+		}
+
+		// Cache the response
 		DnsCache.Set(key, answers, ttl)
+
+		// Record cache miss metric
+		if EnableMetrics {
+			metric.GetFastMetricsInstance().FastRecordCacheMiss()
+		}
 	}()
+
 	return answers
 }
 
