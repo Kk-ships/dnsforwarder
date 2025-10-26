@@ -18,3 +18,27 @@ services:
       - ./domain-routes/:/etc/dnsforwarder/domain-routes/:ro # Mount folder as read-only (recommended) # optional, required for custom domain routes
       # Add more folders/files as needed for custom domain routes
       - ./cache-data/:/app/cache/:rw # Mount cache persistence directory (Optional)
+    labels:
+      - "logging=promtail"
+    depends_on:
+      - 'promtail'
+  loki:
+    image: grafana/loki
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki-data:/loki
+    restart: always
+
+  promtail:
+    image: grafana/promtail
+    container_name: promtail
+    restart: always
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+    depends_on:
+      - loki
