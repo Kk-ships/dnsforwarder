@@ -69,6 +69,9 @@ type Config struct {
 	// Logging Configuration
 	LogLevel string
 
+	// PID File Configuration
+	PidFile string
+
 	// Cache Persistence Configuration
 	EnableCachePersistence   bool
 	CachePersistenceFile     string
@@ -134,6 +137,9 @@ func loadConfig() *Config {
 
 		// Logging Configuration
 		LogLevel: util.GetEnvString("LOG_LEVEL", "info"),
+
+		// PID File Configuration
+		PidFile: util.GetEnvString("PID_FILE", ""),
 
 		// Cache Persistence Configuration
 		EnableCachePersistence:   util.GetEnvBool("ENABLE_CACHE_PERSISTENCE", true),

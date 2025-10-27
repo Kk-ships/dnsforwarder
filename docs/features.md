@@ -10,5 +10,6 @@
 - **Health Checks:** Periodically checks upstream DNS server reachability and only uses healthy servers.
 - **Statistics:** Logs DNS usage and cache hit/miss rates.
 - **Prometheus Metrics:** Comprehensive metrics collection for monitoring and alerting.
+- **PID File Management:** Creates and manages PID files for integration with monitoring tools like monit, Zabbix, and systemd.
 - **Configurable:** All major parameters (DNS servers, cache TTL, ports, metrics, routing folders, reload intervals, etc.) are configurable via environment variables or a `.env` file.
 - **Docker Support:** Lightweight, production-ready Docker image with secure, dynamic configuration via folder mounts.

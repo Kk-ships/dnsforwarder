@@ -37,6 +37,9 @@ CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
 CACHE_PERSISTENCE_INTERVAL=5m
 CACHE_PERSISTENCE_MAX_AGE=1h
 
+# PID File (Optional)
+PID_FILE=/var/run/dnsforwarder.pid
+
 # Logger Configuration
 LOG_LEVEL=info
 ```
@@ -83,3 +86,6 @@ LOG_LEVEL=info
 - **STALE_UPDATE_INTERVAL:** How often to check for stale entries that need updating (default `30s`).
 - **STALE_UPDATE_MIN_ACCESS_COUNT:** Minimum number of times an entry must be accessed to qualify for stale updates (default `5`).
 - **STALE_UPDATE_MAX_CONCURRENT:** Maximum number of concurrent stale update operations (default `10`).
+
+## PID File Configuration
+- **PID_FILE:** Path to the PID file for process monitoring (default `/var/run/dnsforwarder.pid`). Set to empty string to disable PID file creation. See [PID File Management](pid-file.md) for details on integration with monitoring tools.

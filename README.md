@@ -21,5 +21,6 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 - [Domain Routing](docs/domain-routing.md)
 - [Stale Cache Updater](docs/stale-cache-updater.md)
 - [Monitoring and Metrics](docs/monitoring.md)
+- [PID File Management](docs/pid-file.md)
 - [License](#license)
 - [Credits](docs/credits.md)

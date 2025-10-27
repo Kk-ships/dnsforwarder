@@ -145,6 +145,15 @@ func StartDNSServer() {
 			}
 		}
 
+		// Clean up PID file before shutting down server
+		if cfg.PidFile != "" {
+			if err := util.RemovePidFile(cfg.PidFile); err != nil {
+				logutil.Logger.Errorf("Failed to remove PID file during shutdown: %v", err)
+			} else {
+				logutil.Logger.Debug("PID file removed during graceful shutdown")
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.ShutdownContext(ctx); err != nil {
@@ -165,6 +174,24 @@ func StartDNSServer() {
 
 func main() {
 	logutil.Logger.Debug("main: start")
+
+	// Create PID file if specified
+	if cfg.PidFile != "" {
+		if err := util.CreatePidFile(cfg.PidFile); err != nil {
+			logutil.Logger.Fatalf("Failed to create PID file: %v", err)
+		}
+		logutil.Logger.Infof("Created PID file: %s", cfg.PidFile)
+
+		// Ensure PID file is cleaned up on exit
+		defer func() {
+			if err := util.RemovePidFile(cfg.PidFile); err != nil {
+				logutil.Logger.Errorf("Failed to remove PID file: %v", err)
+			} else {
+				logutil.Logger.Infof("Removed PID file: %s", cfg.PidFile)
+			}
+		}()
+	}
+
 	StartDNSServer()
 	logutil.Logger.Debug("main: end")
 	// Ensure all logs are flushed before exit
