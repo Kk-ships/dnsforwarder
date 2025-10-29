@@ -44,6 +44,13 @@ type Config struct {
 	TestDomain     string
 	DNSStatslog    time.Duration
 
+	// DoT (DNS-over-TLS) Configuration
+	EnableDoT        bool
+	DoTServers       []string
+	DoTServerName    string
+	DoTSkipVerify    bool
+	DoTFallbackToUDP bool
+
 	// Cache Configuration
 	CacheSize int
 	CacheTTL  time.Duration
@@ -114,6 +121,13 @@ func loadConfig() *Config {
 		WorkerCount:    util.GetEnvInt("WORKER_COUNT", 5),
 		TestDomain:     util.GetEnvString("TEST_DOMAIN", "google.com"),
 		DNSStatslog:    util.GetEnvDuration("DNS_STATSLOG", 5*time.Minute),
+
+		// DoT (DNS-over-TLS) Configuration
+		EnableDoT:        util.GetEnvBool("ENABLE_DOT", false),
+		DoTServers:       util.GetEnvStringSlice("DOT_SERVERS", ""),
+		DoTServerName:    util.GetEnvString("DOT_SERVER_NAME", ""),
+		DoTSkipVerify:    util.GetEnvBool("DOT_SKIP_VERIFY", false),
+		DoTFallbackToUDP: util.GetEnvBool("DOT_FALLBACK_TO_UDP", true),
 
 		// Cache Configuration
 		CacheSize: util.GetEnvInt("CACHE_SIZE", 10000),
@@ -208,6 +222,14 @@ func (c *Config) Validate() error {
 		}
 		if c.StaleUpdateMaxConcurrent <= 0 {
 			return fmt.Errorf("STALE_UPDATE_MAX_CONCURRENT must be positive, got %d", c.StaleUpdateMaxConcurrent)
+		}
+	}
+	if c.EnableDoT {
+		if c.DoTServerName == "" {
+			return fmt.Errorf("DOT_SERVER_NAME must be set when ENABLE_DOT is true")
+		}
+		if len(c.DoTServers) == 0 {
+			return fmt.Errorf("DOT_SERVERS must be set when ENABLE_DOT is true")
 		}
 	}
 	return nil

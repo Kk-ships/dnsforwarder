@@ -2,7 +2,7 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
 FROM golang:alpine AS builder
-RUN apk add -U tzdata
+RUN apk add -U tzdata ca-certificates
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod/ \
@@ -33,6 +33,7 @@ nonroot:x:65532:65532:nonroot:/home/nonroot:/bin/sh
 EOF
 WORKDIR /app
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /app/main .
 VOLUME ["/app/cache"]
 EXPOSE 53/udp 8080

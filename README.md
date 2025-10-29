@@ -17,6 +17,7 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 - [Features](docs/features.md)
 - [Usage](docs/usage.md)
 - [Configuration](docs/configuration.md)
+- [DNS-over-TLS (DoT)](docs/dns-over-tls.md)
 - [Client-Based DNS Routing](docs/client-routing.md)
 - [Domain Routing](docs/domain-routing.md)
 - [Stale Cache Updater](docs/stale-cache-updater.md)

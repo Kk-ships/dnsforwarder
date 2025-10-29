@@ -1,6 +1,7 @@
 package dnssource
 
 import (
+	"crypto/tls"
 	"dnsloadbalancer/clientrouting"
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/logutil"
@@ -18,12 +19,14 @@ const (
 	ServerTypeUnknown ServerType = iota
 	ServerTypePrivate
 	ServerTypePublic
+	ServerTypeDoT
 )
 
 // serverCache holds server lists for atomic swap
 type serverCache struct {
 	privateServers []string
 	publicServers  []string
+	doTServers     []string
 }
 
 var (
@@ -46,6 +49,9 @@ type metricsRecorderInterface interface {
 }
 
 func InitDNSSource(metricsRecorder metricsRecorderInterface) {
+	// Clear the server type map to ensure clean state
+	serverTypeMap = make(map[string]ServerType)
+
 	// Build single server type map - one lookup instead of two
 	for _, s := range cfg.PrivateServers {
 		if s != "" {
@@ -57,12 +63,26 @@ func InitDNSSource(metricsRecorder metricsRecorderInterface) {
 			serverTypeMap[s] = ServerTypePublic
 		}
 	}
+	// Add DoT servers to the map
+	if cfg.EnableDoT {
+		for _, s := range cfg.DoTServers {
+			if s != "" {
+				serverTypeMap[s] = ServerTypeDoT
+			}
+		}
+	}
 
 	// Pre-allocate with exact capacity to avoid reallocations
 	totalCapacity := len(cfg.PrivateServers) + len(cfg.PublicServers)
+	if cfg.EnableDoT {
+		totalCapacity += len(cfg.DoTServers)
+	}
 	PrivateAndPublicFallback = make([]string, 0, totalCapacity)
 	PrivateAndPublicFallback = append(PrivateAndPublicFallback, cfg.PrivateServers...)
 	PrivateAndPublicFallback = append(PrivateAndPublicFallback, cfg.PublicServers...)
+	if cfg.EnableDoT {
+		PrivateAndPublicFallback = append(PrivateAndPublicFallback, cfg.DoTServers...)
+	}
 
 	// Create a copy with proper capacity
 	PublicServersFallback = make([]string, len(cfg.PublicServers))
@@ -72,10 +92,14 @@ func InitDNSSource(metricsRecorder metricsRecorderInterface) {
 	atomicServerCache.Store(&serverCache{
 		privateServers: []string{},
 		publicServers:  []string{},
+		doTServers:     []string{},
 	})
 
 	logutil.Logger.Infof("Private servers: %v", cfg.PrivateServers)
 	logutil.Logger.Infof("Public servers: %v", cfg.PublicServers)
+	if cfg.EnableDoT {
+		logutil.Logger.Infof("DoT servers: %v", cfg.DoTServers)
+	}
 	logutil.Logger.Infof("Combined servers: %v", PrivateAndPublicFallback)
 	logutil.Logger.Debug("InitDNSSource: end")
 }
@@ -101,13 +125,38 @@ func performHealthCheck(server, testDomain string, dnsClient *dns.Client, dnsMsg
 
 	m.SetQuestion(testDomain, dns.TypeA)
 	m.RecursionDesired = true
-	_, rtt, err := dnsClient.Exchange(m, server)
+
+	// Check if this is a DoT server and use appropriate client
+	var client *dns.Client
+	if IsDoTServer(server) {
+		// Create DoT client for this health check
+		client = &dns.Client{
+			Timeout: cfg.DNSTimeout,
+			Net:     "tcp-tls",
+			TLSConfig: &tls.Config{
+				ServerName:         cfg.DoTServerName,
+				InsecureSkipVerify: cfg.DoTSkipVerify,
+			},
+		}
+	} else {
+		client = dnsClient
+	}
+
+	_, rtt, err := client.Exchange(m, server)
 	return serverHealthCheckResult{
 		server:      server,
 		isReachable: err == nil,
 		rtt:         rtt,
 		err:         err,
 	}
+}
+
+// IsDoTServer checks if a server is configured as a DoT server
+func IsDoTServer(server string) bool {
+	if !cfg.EnableDoT {
+		return false
+	}
+	return serverTypeMap[server] == ServerTypeDoT
 }
 func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	cacheTTL time.Duration,
@@ -146,6 +195,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	var (
 		reachablePrivate = make([]string, 0, len(privateServers)) // preallocate
 		reachablePublic  = make([]string, 0, len(publicServers))  // preallocate
+		reachableDoT     = make([]string, 0, len(cfg.DoTServers)) // preallocate
 		mu               sync.Mutex
 		wg               sync.WaitGroup
 		sem              = make(chan struct{}, cfg.WorkerCount)
@@ -179,20 +229,24 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 			}
 
 			// Minimize lock contention by determining server type before acquiring lock
-			isPrivate, isPublic := categorizeServer(svr)
+			serverType := serverTypeMap[svr]
 
 			mu.Lock()
-			if isPrivate {
+			switch serverType {
+			case ServerTypePrivate:
 				reachablePrivate = append(reachablePrivate, svr)
-			} else if isPublic {
+			case ServerTypePublic:
 				reachablePublic = append(reachablePublic, svr)
+			case ServerTypeDoT:
+				reachableDoT = append(reachableDoT, svr)
 			}
 			mu.Unlock()
 		}(server)
 	}
 
 	wg.Wait()
-	if len(reachablePrivate)+len(reachablePublic) == 0 {
+	totalReachable := len(reachablePrivate) + len(reachablePublic) + len(reachableDoT)
+	if totalReachable == 0 {
 		if enableMetrics {
 			metricsRecorder.RecordError("no_reachable_servers", "health_check")
 		}
@@ -203,6 +257,7 @@ func UpdateDNSServersCache(metricsRecorder metricsRecorderInterface,
 	atomicServerCache.Store(&serverCache{
 		privateServers: reachablePrivate,
 		publicServers:  reachablePublic,
+		doTServers:     reachableDoT,
 	})
 
 	CacheLastUpdated = time.Now()
@@ -220,24 +275,31 @@ func GetServersForClient(clientIP string) (privateServers []string, publicServer
 	cache := cacheVal.(*serverCache)
 
 	if clientrouting.ShouldUsePublicServers(clientIP) {
-		if len(cache.publicServers) > 0 {
-			// Safe to return directly - slice is immutable once stored in atomic.Value
-			return []string{}, cache.publicServers
+		// Combine public servers and DoT servers for public-only clients
+		combinedPublic := make([]string, 0, len(cache.publicServers)+len(cache.doTServers))
+		combinedPublic = append(combinedPublic, cache.publicServers...)
+		combinedPublic = append(combinedPublic, cache.doTServers...)
+
+		if len(combinedPublic) > 0 {
+			return []string{}, combinedPublic
 		}
 		return []string{}, PublicServersFallback
 	}
 
-	if len(cache.privateServers) == 0 && len(cache.publicServers) == 0 {
+	if len(cache.privateServers) == 0 && len(cache.publicServers) == 0 && len(cache.doTServers) == 0 {
 		return []string{}, PrivateAndPublicFallback
 	}
 
-	// Safe to return directly - slices are immutable once stored in atomic.Value
-	return cache.privateServers, cache.publicServers
+	// Combine public and DoT servers as fallback
+	combinedPublic := make([]string, 0, len(cache.publicServers)+len(cache.doTServers))
+	combinedPublic = append(combinedPublic, cache.publicServers...)
+	combinedPublic = append(combinedPublic, cache.doTServers...)
+
+	// Return private servers first, then combined public+DoT as fallback
+	return cache.privateServers, combinedPublic
 }
 
-// categorizeServer returns (isPrivate, isPublic) using single map lookup
-// Optimized: O(1) with single map access instead of two separate map lookups
-func categorizeServer(server string) (isPrivate, isPublic bool) {
-	serverType := serverTypeMap[server]
-	return serverType == ServerTypePrivate, serverType == ServerTypePublic
+// SetConfigForTest sets a test configuration - for testing only
+func SetConfigForTest(testCfg *config.Config) {
+	cfg = testCfg
 }

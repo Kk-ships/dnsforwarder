@@ -1,5 +1,7 @@
 # What's New
 
+- **DNS-over-TLS (DoT) Support:** Encrypt your upstream DNS queries using TLS on port 853 for enhanced privacy and security. Supports automatic fallback to UDP and popular providers like Cloudflare, Google, and Quad9.
+- **PID File Management:** Integrated PID file support for monitoring tools like monit, Zabbix, and systemd.
 - **Stale Cache Updater:** Automatically refresh frequently accessed cache entries before they expire, ensuring popular domains always have fresh responses without client-facing delays.
 - **Cache Persistence (Hot Start):** DNS cache is now persisted to disk and automatically restored on container restarts, providing faster response times after restarts. Cache for hot restart is valid for 1 hour only.
 - **Folder-based Domain Routing:** Load domain routing rules from all `.txt` files in a specified folder, making management and updates easier.

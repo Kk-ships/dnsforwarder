@@ -1,6 +1,7 @@
 # Features
 
 - **DNS Forwarding:** Forwards DNS queries to one or more upstream DNS servers.
+- **DNS-over-TLS (DoT):** Optional encrypted DNS queries to upstream servers using TLS on port 853 with automatic fallback to UDP.
 - **Client-Based Routing:** Route different clients to different upstream DNS servers (private/public).
 - **Domain Routing (Folder-Based):** Forward DNS queries for specific domains to designated upstream servers using rules from all `.txt` files in a folder.
 - **Hot-Reload Routing Table:** Automatically refresh domain routing rules at a configurable interval.

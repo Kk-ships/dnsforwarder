@@ -1,6 +1,7 @@
 package dnsresolver
 
 import (
+	"crypto/tls"
 	"dnsloadbalancer/config"
 	"dnsloadbalancer/dnssource"
 
@@ -24,6 +25,17 @@ var (
 		return &dns.Client{
 			Timeout: config.Get().DNSTimeout,
 			Net:     "udp",
+		}
+	}}
+	doTClientPool = sync.Pool{New: func() any {
+		cfg := config.Get()
+		return &dns.Client{
+			Timeout: cfg.DNSTimeout,
+			Net:     "tcp-tls",
+			TLSConfig: &tls.Config{
+				ServerName:         cfg.DoTServerName,
+				InsecureSkipVerify: cfg.DoTSkipVerify,
+			},
 		}
 	}}
 	cfg = config.Get()
@@ -117,21 +129,67 @@ func upstreamDNSQuery(privateServers []string, publicServers []string, m *dns.Ms
 }
 
 func exchangeWithServer(m *dns.Msg, svr string) ([]dns.RR, error) {
-	// Get pooled DNS client for better performance
-	dnsClient := dnsClientPool.Get().(*dns.Client)
-	defer dnsClientPool.Put(dnsClient)
+	// Determine if this is a DoT server
+	isDoTServer := dnssource.IsDoTServer(svr)
 
-	// Update timeout from current config if needed
-	if dnsClient.Timeout != cfg.DNSTimeout {
-		dnsClient.Timeout = cfg.DNSTimeout
+	var dnsClient *dns.Client
+	var rtt time.Duration
+	var response *dns.Msg
+	var err error
+
+	if isDoTServer {
+		// Use DoT client
+		dnsClient = doTClientPool.Get().(*dns.Client)
+		defer doTClientPool.Put(dnsClient)
+
+		// Update timeout and TLS config if needed
+		if dnsClient.Timeout != cfg.DNSTimeout {
+			dnsClient.Timeout = cfg.DNSTimeout
+		}
+		if dnsClient.TLSConfig != nil {
+			if dnsClient.TLSConfig.ServerName != cfg.DoTServerName {
+				dnsClient.TLSConfig.ServerName = cfg.DoTServerName
+			}
+			if dnsClient.TLSConfig.InsecureSkipVerify != cfg.DoTSkipVerify {
+				dnsClient.TLSConfig.InsecureSkipVerify = cfg.DoTSkipVerify
+			}
+		}
+
+		response, rtt, err = dnsClient.Exchange(m, svr)
+
+		// Fallback to UDP if DoT fails and fallback is enabled
+		if err != nil && cfg.DoTFallbackToUDP {
+			logutil.Logger.Debugf("DoT query failed for %s, falling back to UDP: %v", svr, err)
+			dnsClient = dnsClientPool.Get().(*dns.Client)
+			defer dnsClientPool.Put(dnsClient)
+			if dnsClient.Timeout != cfg.DNSTimeout {
+				dnsClient.Timeout = cfg.DNSTimeout
+			}
+			response, rtt, err = dnsClient.Exchange(m, svr)
+		}
+	} else {
+		// Use regular UDP client
+		dnsClient = dnsClientPool.Get().(*dns.Client)
+		defer dnsClientPool.Put(dnsClient)
+
+		// Update timeout from current config if needed
+		if dnsClient.Timeout != cfg.DNSTimeout {
+			dnsClient.Timeout = cfg.DNSTimeout
+		}
+
+		response, rtt, err = dnsClient.Exchange(m, svr)
 	}
 
-	response, rtt, err := dnsClient.Exchange(m, svr)
 	if err == nil && response != nil {
 		// Use atomic operations for stats - faster than mutex
 		incrementServerUsage(svr)
 		if cfg.EnableMetrics {
+			protocol := "udp"
+			if isDoTServer {
+				protocol = "dot"
+			}
 			metric.GetFastMetricsInstance().FastRecordUpstreamQuery(svr, "success", rtt)
+			metric.GetFastMetricsInstance().FastRecordError("upstream_protocol_"+protocol, "dns_exchange")
 		}
 		return response.Answer, nil
 	}

@@ -31,6 +31,13 @@ ENABLE_DOMAIN_ROUTING=true
 DOMAIN_ROUTING_FOLDER=/etc/dnsforwarder/domain-routes
 DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
 
+# DoT (DNS-over-TLS) Configuration (Optional)
+ENABLE_DOT=false
+DOT_SERVERS=1.1.1.1:853,8.8.8.8:853
+DOT_SERVER_NAME=cloudflare-dns.com
+DOT_SKIP_VERIFY=false
+DOT_FALLBACK_TO_UDP=true
+
 # Cache Persistence (Optional)
 ENABLE_CACHE_PERSISTENCE=true
 CACHE_PERSISTENCE_FILE=/app/cache/dns_cache.json
@@ -73,6 +80,13 @@ LOG_LEVEL=info
 - **ENABLE_DOMAIN_ROUTING:** Enable domain routing (default `false`).
 - **DOMAIN_ROUTING_FOLDER:** Comma-separated list of folders containing routing configuration files
 - **DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL** Domain routing reload interval in seconds
+
+## DoT (DNS-over-TLS) Configuration
+- **ENABLE_DOT:** Enable DNS-over-TLS for upstream queries (default `false`).
+- **DOT_SERVERS:** Comma-separated list of DoT server addresses with port 853 (e.g., `1.1.1.1:853,8.8.8.8:853`).
+- **DOT_SERVER_NAME:** Server name for TLS certificate validation (e.g., `cloudflare-dns.com`). This value must be set when ENABLE_DOT is true.
+- **DOT_SKIP_VERIFY:** Skip TLS certificate verification (default `false`). Only enable for testing.
+- **DOT_FALLBACK_TO_UDP:** Fallback to regular UDP DNS if DoT connection fails (default `true`).
 
 ## Cache Persistence Configuration
 - **ENABLE_CACHE_PERSISTENCE:** Enable cache persistence to disk for hot starts (default `true`).

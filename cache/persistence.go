@@ -97,6 +97,11 @@ func SaveCacheToFile() error {
 		return fmt.Errorf("cache directory check failed: %w", err)
 	}
 
+	// Check if cache is initialized
+	if DnsCache == nil {
+		return fmt.Errorf("cache not initialized")
+	}
+
 	logutil.Logger.Debug("Starting cache persistence to disk")
 
 	items := DnsCache.Items()
@@ -301,6 +306,12 @@ func LoadCacheFromFile() error {
 // StartCachePersistence starts the periodic cache persistence
 func StartCachePersistence() {
 	if !cfg.EnableCachePersistence {
+		return
+	}
+
+	// Check if cache is initialized before starting persistence
+	if DnsCache == nil {
+		logutil.Logger.Warn("Cache not initialized, skipping cache persistence")
 		return
 	}
 
