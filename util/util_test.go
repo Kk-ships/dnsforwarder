@@ -616,115 +616,6 @@ func TestExtractMACOUI(t *testing.T) {
 	}
 }
 
-func TestMACMatchesOUI(t *testing.T) {
-	tests := []struct {
-		name     string
-		mac      string
-		ouiList  []string
-		expected bool
-	}{
-		{
-			name:     "exact OUI match",
-			mac:      "68:57:2d:aa:bb:cc",
-			ouiList:  []string{"68:57:2d"},
-			expected: true,
-		},
-		{
-			name:     "multiple OUIs - match first",
-			mac:      "68:57:2d:aa:bb:cc",
-			ouiList:  []string{"68:57:2d", "10:5a:17", "d8:1f:12"},
-			expected: true,
-		},
-		{
-			name:     "multiple OUIs - match middle",
-			mac:      "10:5a:17:aa:bb:cc",
-			ouiList:  []string{"68:57:2d", "10:5a:17", "d8:1f:12"},
-			expected: true,
-		},
-		{
-			name:     "multiple OUIs - match last",
-			mac:      "d8:1f:12:aa:bb:cc",
-			ouiList:  []string{"68:57:2d", "10:5a:17", "d8:1f:12"},
-			expected: true,
-		},
-		{
-			name:     "no match",
-			mac:      "aa:bb:cc:dd:ee:ff",
-			ouiList:  []string{"68:57:2d", "10:5a:17"},
-			expected: false,
-		},
-		{
-			name:     "empty MAC",
-			mac:      "",
-			ouiList:  []string{"68:57:2d"},
-			expected: false,
-		},
-		{
-			name:     "empty OUI list",
-			mac:      "68:57:2d:aa:bb:cc",
-			ouiList:  []string{},
-			expected: false,
-		},
-		{
-			name:     "MAC with dashes, OUI with colons",
-			mac:      "68-57-2d-aa-bb-cc",
-			ouiList:  []string{"68:57:2d"},
-			expected: true,
-		},
-		{
-			name:     "mixed case - should still match",
-			mac:      "68:57:2D:AA:BB:CC",
-			ouiList:  []string{"68:57:2d"},
-			expected: true,
-		},
-		{
-			name:     "partial OUI (2 octets)",
-			mac:      "68:57:2d:aa:bb:cc",
-			ouiList:  []string{"68:57"},
-			expected: false,
-		},
-		{
-			name:     "partial OUI (1 octet)",
-			mac:      "68:57:2d:aa:bb:cc",
-			ouiList:  []string{"68"},
-			expected: false,
-		},
-		{
-			name:     "invalid OUI in list",
-			mac:      "68:57:2d:aa:bb:cc",
-			ouiList:  []string{"invalid", "68:57:2d"},
-			expected: true,
-		},
-		{
-			name:     "OUI with dashes",
-			mac:      "68:57:2d:aa:bb:cc",
-			ouiList:  []string{"68-57-2d"},
-			expected: true,
-		},
-		{
-			name:     "real-world TUYA devices",
-			mac:      "68:57:2d:12:34:56",
-			ouiList:  []string{"68:57:2d", "10:5a:17", "d8:1f:12"},
-			expected: true,
-		},
-		{
-			name:     "real-world non-TUYA device",
-			mac:      "ac:a6:2f:12:34:56",
-			ouiList:  []string{"68:57:2d", "10:5a:17", "d8:1f:12"},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := MACMatchesOUI(tt.mac, tt.ouiList)
-			if result != tt.expected {
-				t.Errorf("MACMatchesOUI(%v, %v) = %v, want %v", tt.mac, tt.ouiList, result, tt.expected)
-			}
-		})
-	}
-}
-
 // Benchmark tests to verify optimizations
 func BenchmarkGetEnvString(b *testing.B) {
 	if err := os.Setenv("BENCH_TEST", "benchmark_value"); err != nil {
@@ -780,16 +671,6 @@ func BenchmarkExtractMACOUI(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ExtractMACOUI(testMAC)
-	}
-}
-
-func BenchmarkMACMatchesOUI(b *testing.B) {
-	testMAC := "68:57:2d:aa:bb:cc"
-	ouiList := []string{"68:57:2d", "10:5a:17", "d8:1f:12"}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		MACMatchesOUI(testMAC, ouiList)
 	}
 }
 

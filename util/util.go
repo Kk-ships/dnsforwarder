@@ -260,33 +260,6 @@ func ExtractMACOUI(mac string) string {
 	return sb.String()
 }
 
-// MACMatchesOUI checks if a MAC address matches any of the given OUI prefixes
-func MACMatchesOUI(mac string, ouiList []string) bool {
-	if mac == "" || len(ouiList) == 0 {
-		return false
-	}
-
-	oui := ExtractMACOUI(mac)
-	if oui == "" {
-		return false
-	}
-
-	for _, targetOUI := range ouiList {
-		normalizedTarget := NormalizeMAC(targetOUI)
-		if normalizedTarget == "" {
-			continue
-		}
-		// Only match if targetOUI has at least 3 octets (standard OUI)
-		if len(strings.Split(normalizedTarget, ":")) >= 3 {
-			// Support full OUI (aa:bb:cc)
-			if oui == normalizedTarget {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func GetClientIP(w dns.ResponseWriter) string {
 	addr := w.RemoteAddr()
 	switch a := addr.(type) {
