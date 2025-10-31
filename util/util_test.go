@@ -548,6 +548,74 @@ func TestClearCaches(t *testing.T) {
 	ClearEnvCaches()
 }
 
+func TestExtractMACOUI(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "standard MAC address",
+			input:    "00:11:22:33:44:55",
+			expected: "00:11:22",
+		},
+		{
+			name:     "MAC with dashes",
+			input:    "AA-BB-CC-DD-EE-FF",
+			expected: "aa:bb:cc",
+		},
+		{
+			name:     "MAC with dots",
+			input:    "12.34.56.78.9a.bc",
+			expected: "12:34:56",
+		},
+		{
+			name:     "mixed case MAC",
+			input:    "aA:Bb:Cc:Dd:Ee:Ff",
+			expected: "aa:bb:cc",
+		},
+		{
+			name:     "MAC with spaces",
+			input:    "00 11 22 33 44 55",
+			expected: "00:11:22",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "incomplete MAC (less than 3 octets)",
+			input:    "00:11",
+			expected: "",
+		},
+		{
+			name:     "TUYA device MAC",
+			input:    "68:57:2d:aa:bb:cc",
+			expected: "68:57:2d",
+		},
+		{
+			name:     "invalid MAC",
+			input:    "not:a:mac",
+			expected: "",
+		},
+		{
+			name:     "MAC without separators",
+			input:    "001122334455",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractMACOUI(tt.input)
+			if result != tt.expected {
+				t.Errorf("ExtractMACOUI(%v) = %v, want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 // Benchmark tests to verify optimizations
 func BenchmarkGetEnvString(b *testing.B) {
 	if err := os.Setenv("BENCH_TEST", "benchmark_value"); err != nil {
@@ -594,6 +662,15 @@ func BenchmarkRunCommand(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = RunCommand("echo", []string{"test"})
+	}
+}
+
+func BenchmarkExtractMACOUI(b *testing.B) {
+	testMAC := "68:57:2d:aa:bb:cc"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ExtractMACOUI(testMAC)
 	}
 }
 

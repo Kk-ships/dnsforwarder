@@ -26,12 +26,37 @@ func CreatePidFile(pidPath string) error {
 		return err
 	}
 
-	// Write current process PID to file
+	// Write current process PID to file atomically using O_EXCL to prevent race conditions
 	pid := os.Getpid()
 	pidStr := strconv.Itoa(pid)
 
-	if err := os.WriteFile(pidPath, []byte(pidStr), 0644); err != nil {
-		return fmt.Errorf("failed to write PID file %s: %v", pidPath, err)
+	// Try to create the file exclusively (will fail if file exists)
+	file, err := os.OpenFile(pidPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			// File was created by another process between our check and create
+			// Check again if that process is still running
+			if checkErr := checkExistingPidFile(pidPath); checkErr != nil {
+				return checkErr
+			}
+			// Try one more time
+			file, err = os.OpenFile(pidPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+			if err != nil {
+				return fmt.Errorf("failed to create PID file %s: %v", pidPath, err)
+			}
+		} else {
+			return fmt.Errorf("failed to create PID file %s: %v", pidPath, err)
+		}
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			// Log or handle close error, but don't override the write error
+			err = fmt.Errorf("failed to close PID file %s: %v", pidPath, closeErr)
+		}
+	}()
+
+	if _, err := file.WriteString(pidStr); err != nil {
+		return fmt.Errorf("failed to write PID to file %s: %v", pidPath, err)
 	}
 
 	return nil
