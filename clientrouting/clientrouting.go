@@ -14,6 +14,7 @@ import (
 var (
 	PublicOnlyClientsMap    sync.Map // map[string]bool for fast lookup (IP)
 	PublicOnlyClientMACsMap sync.Map // map[string]bool for fast lookup (MAC)
+	PublicOnlyClientOUIMap  sync.Map // map[string]bool for fast lookup (MAC OUI prefixes)
 
 	// MAC address cache using go-cache
 	macCache    *cache.Cache
@@ -32,6 +33,7 @@ func InitializeClientRouting() {
 
 	storeClientsToMap(cfg.PublicOnlyClients, &PublicOnlyClientsMap, "IP")
 	storeMACsToMap(cfg.PublicOnlyClientMACs, &PublicOnlyClientMACsMap)
+	storeOUIsToMap(cfg.PublicOnlyClientMACOUIs, &PublicOnlyClientOUIMap)
 
 	logutil.Logger.Debug("InitializeClientRouting: end")
 }
@@ -56,6 +58,17 @@ func storeMACsToMap(macs []string, m *sync.Map) {
 		}
 	}
 	logutil.Logger.Debug("storeMACsToMap: end")
+}
+
+func storeOUIsToMap(ouis []string, m *sync.Map) {
+	for _, oui := range ouis {
+		ouiNorm := util.NormalizeMAC(oui)
+		if ouiNorm != "" {
+			m.Store(ouiNorm, true)
+			logutil.Logger.Infof("Configured MAC OUI prefix %s to use public servers only (Vendor)", ouiNorm)
+		}
+	}
+	logutil.Logger.Debug("storeOUIsToMap: end")
 }
 
 // getMACWithCache retrieves MAC address for IP with caching
@@ -88,13 +101,29 @@ func ShouldUsePublicServers(clientIP string) bool {
 		return false
 	}
 
+	// Check IP-based routing first (fastest)
 	if _, exists := PublicOnlyClientsMap.Load(clientIP); exists {
 		return true
 	}
+
+	// Get MAC address for the client
 	mac := getMACWithCache(clientIP)
 	if mac != "" {
-		_, exists := PublicOnlyClientMACsMap.Load(mac)
-		return exists
+		// Check exact MAC match
+		if _, exists := PublicOnlyClientMACsMap.Load(mac); exists {
+			return true
+		}
+
+		// Check MAC OUI (vendor prefix) match
+		oui := util.ExtractMACOUI(mac)
+		if oui != "" {
+			// Check for exact OUI match first
+			if _, exists := PublicOnlyClientOUIMap.Load(oui); exists {
+				logutil.Logger.Debugf("Client %s (MAC: %s, OUI: %s) matched OUI prefix, using public servers", clientIP, mac, oui)
+				return true
+			}
+		}
 	}
+
 	return false
 }
