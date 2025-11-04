@@ -57,9 +57,10 @@ type Config struct {
 	MetricsBatchDelay time.Duration // Delay between metric batches
 
 	// Client Routing Configuration
-	PublicOnlyClients    []string
-	PublicOnlyClientMACs []string
-	EnableClientRouting  bool
+	PublicOnlyClients       []string
+	PublicOnlyClientMACs    []string
+	PublicOnlyClientMACOUIs []string // MAC vendor prefixes (OUI)
+	EnableClientRouting     bool
 
 	// Domain Routing Configuration
 	EnableDomainRouting              bool
@@ -126,9 +127,10 @@ func loadConfig() *Config {
 		MetricsBatchDelay: util.GetEnvDuration("METRICS_BATCH_DELAY", 100*time.Millisecond),
 
 		// Client Routing Configuration
-		PublicOnlyClients:    util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", ""),
-		PublicOnlyClientMACs: util.GetEnvStringSlice("PUBLIC_ONLY_CLIENT_MACS", ""),
-		EnableClientRouting:  util.GetEnvBool("ENABLE_CLIENT_ROUTING", false),
+		PublicOnlyClients:       util.GetEnvStringSlice("PUBLIC_ONLY_CLIENTS", ""),
+		PublicOnlyClientMACs:    util.GetEnvStringSlice("PUBLIC_ONLY_CLIENT_MACS", ""),
+		PublicOnlyClientMACOUIs: util.GetEnvStringSlice("PUBLIC_ONLY_CLIENT_MAC_OUIS", ""),
+		EnableClientRouting:     util.GetEnvBool("ENABLE_CLIENT_ROUTING", false),
 
 		// Domain Routing Configuration
 		EnableDomainRouting:              util.GetEnvBool("ENABLE_DOMAIN_ROUTING", false),

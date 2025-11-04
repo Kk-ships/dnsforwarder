@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	envDurationCache sync.Map // map[string]time.Duration
-	envIntCache      sync.Map // map[string]int
-	envStringCache   sync.Map // map[string]string
+	envDurationCache   sync.Map // map[string]time.Duration
+	envIntCache        sync.Map // map[string]int
+	envStringCache     sync.Map // map[string]string
+	normalizedMACCache sync.Map // map[string]string - cache for normalized MAC addresses
 
 	// Object pools to reduce allocations
 	stringBuilderPool = sync.Pool{
@@ -136,6 +137,7 @@ func ClearEnvCaches() {
 	envDurationCache = sync.Map{}
 	envIntCache = sync.Map{}
 	envStringCache = sync.Map{}
+	normalizedMACCache = sync.Map{}
 }
 
 // RunCommand runs a system command and returns its output as a string with optimized allocation.
@@ -153,10 +155,15 @@ func RunCommand(cmd string, args []string) (string, error) {
 	return buf.String(), err
 }
 
-// NormalizeMAC returns a lower-case, colon-separated MAC address string with optimized allocation
+// NormalizeMAC returns a lower-case, colon-separated MAC address string with optimized allocation and caching
 func NormalizeMAC(mac string) string {
 	if mac == "" {
 		return ""
+	}
+
+	// Check cache first
+	if cached, ok := normalizedMACCache.Load(mac); ok {
+		return cached.(string)
 	}
 
 	// Use pooled string builder to reduce allocations
@@ -192,6 +199,9 @@ func NormalizeMAC(mac string) string {
 		result = result[:len(result)-1]
 	}
 
+	// Cache the result for future lookups
+	normalizedMACCache.Store(mac, result)
+
 	return result
 }
 
@@ -219,6 +229,35 @@ func GetMACFromARP(ip string) string {
 		}
 	}
 	return ""
+}
+
+// ExtractMACOUI extracts the OUI (first 3 octets) from a MAC address
+// Returns normalized OUI in format "aa:bb:cc" or empty string if invalid
+func ExtractMACOUI(mac string) string {
+	normalized := NormalizeMAC(mac)
+	if normalized == "" {
+		return ""
+	}
+
+	// Split by colon and take first 3 octets
+	parts := strings.Split(normalized, ":")
+	if len(parts) < 3 {
+		return ""
+	}
+
+	// Use pooled string builder
+	sb := stringBuilderPool.Get().(*strings.Builder)
+	defer stringBuilderPool.Put(sb)
+	sb.Reset()
+	sb.Grow(8) // "aa:bb:cc" is 8 chars
+
+	sb.WriteString(parts[0])
+	sb.WriteByte(':')
+	sb.WriteString(parts[1])
+	sb.WriteByte(':')
+	sb.WriteString(parts[2])
+
+	return sb.String()
 }
 
 func GetClientIP(w dns.ResponseWriter) string {
