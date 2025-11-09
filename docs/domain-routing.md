@@ -1,11 +1,13 @@
 # Domain Routing
 
 Domain routing allows you to forward DNS queries for specific domains to specific upstream DNS servers. This is useful for scenarios such as:
+
 - Sending queries for internal domains to a private DNS server
 - Forwarding queries for certain public domains to a specific provider
 - Overriding DNS for selected domains
 
 ## How It Works
+
 - When `ENABLE_DOMAIN_ROUTING=true` is set, the DNS forwarder loads domain routing rules from all `.txt` files in the folder specified by the `DOMAIN_ROUTING_FOLDER` environment variable.
 - Each file should contain rules in the format: `/domain/ip`, one per line. Lines starting with `#` are treated as comments.
 - When a DNS query matches a domain in the routing table, the query is forwarded to the specified IP address for that domain.
@@ -13,7 +15,9 @@ Domain routing allows you to forward DNS queries for specific domains to specifi
 - The routing table is automatically refreshed at intervals specified by `DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL` in seconds (default: 60 seconds).
 
 ## Example Configuration
+
 Add to your `.env` file:
+
 ```
 ENABLE_DOMAIN_ROUTING=true
 DOMAIN_ROUTING_FOLDER=/etc/dnsforwarder/domain-routes
@@ -21,6 +25,7 @@ DOMAIN_ROUTING_TABLE_RELOAD_INTERVAL=60
 ```
 
 Example `domain-routes.txt`:
+
 ```
 # Format: /domain/ip
 address=/example.com/192.168.1.10
@@ -29,6 +34,7 @@ address=/internal.corp/10.10.1.1
 ```
 
 ## Notes
+
 - The domain routing file must be a plain text file, not a directory.
 - Routing file follows dnsmasq conventions of domain routing for easier integration with existing tools.
 - Each rule must have both a domain and an IP address, separated by `/`.
@@ -37,6 +43,7 @@ address=/internal.corp/10.10.1.1
 - If a domain is not found in the routing table, the forwarder falls back to client or default routing.
 
 ## Troubleshooting
+
 - Check logs for messages about domain routing initialization and file loading errors.
 - Make sure the file paths in `DOMAIN_ROUTING_FOLDER` are correct and accessible by the DNS forwarder.
 - Ensure each rule is in the correct format and not commented out.

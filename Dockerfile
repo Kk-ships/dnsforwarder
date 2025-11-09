@@ -2,7 +2,7 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
 FROM golang:alpine AS builder
-RUN apk add -U tzdata
+RUN apk add --no-cache tzdata
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod/ \
@@ -31,7 +31,9 @@ COPY <<EOF /etc/passwd
 root:x:0:0:root:/root:/bin/sh
 nonroot:x:65532:65532:nonroot:/home/nonroot:/bin/sh
 EOF
+
 WORKDIR /app
+
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /app/main .
 VOLUME ["/app/cache"]

@@ -114,6 +114,7 @@ services:
 ```
 
 Use Docker's native health checks and monitoring:
+
 ```bash
 # Check if container is running
 docker ps | grep dnsforwarder
@@ -128,6 +129,7 @@ docker stats dnsforwarder
 **2. Monitoring from the Host System**
 
 If you need to monitor the process **from the host** (e.g., with monit or Zabbix running on the host), you must:
+
 - Mount a volume to expose the PID file to the host
 - Ensure the PID file path is writable
 
@@ -233,6 +235,7 @@ export PID_FILE=/var/run/dnsforwarder.pid
 ```
 
 Monit configuration:
+
 ```monit
 check process dnsforwarder with pidfile /var/run/dnsforwarder.pid
   start program = "/usr/local/bin/dnsforwarder"

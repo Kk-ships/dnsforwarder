@@ -7,17 +7,47 @@ repos:
   - id: end-of-file-fixer
   - id: check-yaml
   - id: check-added-large-files
+  - id: check-json
+  - id: check-toml
+  - id: check-merge-conflict
+  - id: check-case-conflict
+  - id: detect-private-key
+  - id: mixed-line-ending
+    args: ['--fix=lf']
+  - id: check-executables-have-shebangs
+  - id: check-shebang-scripts-are-executable
 
 # --- Go formatting & imports ---
 - repo: https://github.com/dnephin/pre-commit-golang
   rev: v0.5.1
   hooks:
+  - id: go-fmt
+    args: ['-s']  # simplify code
   - id: go-imports
   - id: go-vet
   - id: go-unit-tests
+  - id: go-build
+  - id: go-mod-tidy
 
 # --- GolangCI-Lint (official pre-commit repo) ---
 - repo: https://github.com/golangci/golangci-lint
   rev: v2.4.0  # match your local/CI version
   hooks:
   - id: golangci-lint
+    args: ['--timeout=5m']
+
+# --- Dockerfile linting ---
+- repo: https://github.com/hadolint/hadolint
+  rev: v2.14.0
+  hooks:
+  - id: hadolint-docker
+    name: Lint Dockerfiles
+    args: ['--ignore', 'DL3018']
+
+# --- Commit message validation ---
+- repo: https://github.com/compilerla/conventional-pre-commit
+  rev: v4.3.0
+  hooks:
+  - id: conventional-pre-commit
+    stages: [commit-msg]
+    args: []  # optional: add --force, --strict, etc.

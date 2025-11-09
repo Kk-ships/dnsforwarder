@@ -32,11 +32,13 @@ For scenarios where you want to route all devices from a specific manufacturer, 
 Set the `PUBLIC_ONLY_CLIENT_MAC_OUIS` environment variable to a comma-separated list of OUI prefixes. An OUI is the first 3 octets (6 hex digits) of a MAC address that identifies the manufacturer.
 
 **Example Use Cases:**
+
 - Route all IoT devices to a restricted DNS server that only allows NTP servers
 - Send all Amazon devices (Echo, Fire TV) to public DNS to avoid blocking their services
 - Direct all Google devices (Nest, Chromecast) to specific DNS servers
 
 **Common OUI Prefixes:**
+
 - TUYA Smart: `68:57:2d`, `10:5a:17`, `d8:1f:12`
 - Amazon/Eero: `f0:d7:aa`, `ac:a6:2f`
 - Google Nest: `64:16:66`, `f4:f5:d8`
@@ -45,6 +47,7 @@ Set the `PUBLIC_ONLY_CLIENT_MAC_OUIS` environment variable to a comma-separated 
 You can find OUI prefixes for any manufacturer at [IEEE OUI Database](https://standards-oui.ieee.org/) or [MAC Vendors Database](https://macvendors.com/).
 
 **Example Configuration:**
+
 ```bash
 # Route all TUYA devices to a restricted DNS (NTP-only)
 PUBLIC_ONLY_CLIENT_MAC_OUIS=68:57:2d,10:5a:17,d8:1f:12
@@ -65,6 +68,7 @@ PUBLIC_ONLY_CLIENT_MAC_OUIS=68:57:2d,10:5a:17
 ## Example Scenarios
 
 **Scenario 1: PiHole with Public Fallback**
+
 ```bash
 ENABLE_CLIENT_ROUTING=true
 PRIVATE_DNS_SERVERS=192.168.1.10:53    # Your PiHole
@@ -74,6 +78,7 @@ PUBLIC_ONLY_CLIENT_MACS=00:11:22:33:44:55 # Problematic device (by MAC)
 ```
 
 **Scenario 2: Multiple Private Servers**
+
 ```bash
 ENABLE_CLIENT_ROUTING=true
 PRIVATE_DNS_SERVERS=192.168.1.10:53,192.168.1.11:53  # PiHole + AdGuard
@@ -84,6 +89,7 @@ PUBLIC_ONLY_CLIENT_MAC_OUIS=68:57:2d                  # All TUYA devices (by OUI
 ```
 
 **Scenario 3: Corporate Environment**
+
 ```bash
 ENABLE_CLIENT_ROUTING=true
 PRIVATE_DNS_SERVERS=10.10.1.1:53,10.10.1.2:53       # Internal DNS
@@ -93,15 +99,18 @@ PUBLIC_ONLY_CLIENT_MACS=11:22:33:44:55:66           # Guest device (by MAC)
 ```
 
 **Scenario 4: IoT Device Control (TUYA devices to restricted DNS)**
+
 ```bash
 ENABLE_CLIENT_ROUTING=true
 PRIVATE_DNS_SERVERS=192.168.1.10:53                 # Your PiHole for normal devices
 PUBLIC_DNS_SERVERS=192.168.1.50:53                  # Restricted DNS (NTP-only, no external access)
 PUBLIC_ONLY_CLIENT_MAC_OUIS=68:57:2d,10:5a:17,d8:1f:12  # TUYA device OUIs
 ```
+
 In this scenario, all TUYA IoT devices will use the restricted DNS server at `192.168.1.50:53` which could be configured to only allow NTP servers and block all other internet access, effectively sandboxing your IoT devices.
 
 ## Benefits
+
 - **Centralized Control:** Change DNS behavior without touching individual devices
 - **Flexibility:** Easy to test different configurations or troubleshoot problematic devices
 - **Reliability:** Automatic fallback ensures DNS always works

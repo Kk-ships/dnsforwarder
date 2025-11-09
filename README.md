@@ -13,6 +13,7 @@ A high-performance, cache-enabled DNS forwarder written in Go. This project forw
 *Detailed performance panels including query trends by type, response time distribution, upstream server performance, cache performance, and error analysis*
 
 ## Table of Contents
+
 - [What's New](docs/whats-new.md)
 - [Features](docs/features.md)
 - [Usage](docs/usage.md)
