@@ -75,6 +75,10 @@ func Init(defaultDNSCacheTTL time.Duration, enableMetrics bool, _ any, enableCli
 
 // CacheKey generates a cache key for the given domain and query type
 func CacheKey(domain string, qtype uint16) string {
+	// Normalize domain to FQDN format to ensure cache key consistency
+	// This prevents cache misses due to "example.com" vs "example.com." differences
+	domain = dns.Fqdn(domain)
+
 	// For common DNS types, use pre-computed suffixes to minimize allocations
 	switch qtype {
 	case 1: // A record
