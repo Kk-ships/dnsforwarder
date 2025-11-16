@@ -8,6 +8,7 @@ services:
     ports:
       - "53:53/udp"
       - "8080:8080" # Optional: Expose metrics on port 8080
+      - "6060:6060" # Optional: Expose profiling on port 6060
     env_file:
       - .env
     restart: always
