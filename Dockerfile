@@ -37,5 +37,5 @@ WORKDIR /app
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=builder /app/main .
 VOLUME ["/app/cache"]
-EXPOSE 53/udp 8080
+EXPOSE 53/udp 8080 6060
 CMD ["./main"]

@@ -85,6 +85,10 @@ type Config struct {
 	StaleUpdateInterval       time.Duration // How often to check for stale entries
 	StaleUpdateMinAccessCount int           // Minimum access count to qualify for stale update
 	StaleUpdateMaxConcurrent  int           // Maximum concurrent stale updates
+
+	// Profiling Configuration
+	EnableProfiling bool
+	ProfilingPort   string
 }
 
 var (
@@ -155,6 +159,10 @@ func loadConfig() *Config {
 		StaleUpdateInterval:       util.GetEnvDuration("STALE_UPDATE_INTERVAL", 30*time.Second),
 		StaleUpdateMinAccessCount: util.GetEnvInt("STALE_UPDATE_MIN_ACCESS_COUNT", 5),
 		StaleUpdateMaxConcurrent:  util.GetEnvInt("STALE_UPDATE_MAX_CONCURRENT", 10),
+
+		// Profiling Configuration
+		EnableProfiling: util.GetEnvBool("ENABLE_PROFILING", false),
+		ProfilingPort:   util.GetEnvString("PROFILING_PORT", ":6060"),
 	}
 
 	return c

@@ -11,6 +11,8 @@ import (
 	"dnsloadbalancer/logutil"
 	"dnsloadbalancer/metric"
 	"dnsloadbalancer/util"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -103,6 +105,16 @@ func StartDNSServer() {
 		metric.StartMetricsServer()
 		metric.StartMetricsUpdater()
 		logutil.Logger.Infof("Prometheus metrics enabled on %s/metrics", cfg.MetricsPort)
+	}
+
+	// Start profiling server if enabled
+	if cfg.EnableProfiling {
+		go func() {
+			logutil.Logger.Infof("Profiling enabled on %s/debug/pprof/", cfg.ProfilingPort)
+			if err := http.ListenAndServe(cfg.ProfilingPort, nil); err != nil {
+				logutil.Logger.Errorf("Failed to start profiling server: %v", err)
+			}
+		}()
 	}
 
 	// DNS server setup

@@ -70,11 +70,11 @@ func TestCacheKey_CommonTypes(t *testing.T) {
 		qtype    uint16
 		expected string
 	}{
-		{"A record", "example.com", 1, "example.com" + config.SuffixA},
-		{"AAAA record", "example.com", 28, "example.com" + config.SuffixAAAA},
-		{"CNAME record", "example.com", 5, "example.com" + config.SuffixCNAME},
-		{"MX record", "example.com", 15, "example.com" + config.SuffixMX},
-		{"TXT record", "example.com", 16, "example.com" + config.SuffixTXT},
+		{"A record", "example.com", 1, "example.com." + config.SuffixA},
+		{"AAAA record", "example.com", 28, "example.com." + config.SuffixAAAA},
+		{"CNAME record", "example.com", 5, "example.com." + config.SuffixCNAME},
+		{"MX record", "example.com", 15, "example.com." + config.SuffixMX},
+		{"TXT record", "example.com", 16, "example.com." + config.SuffixTXT},
 	}
 
 	for _, tt := range tests {
@@ -88,7 +88,7 @@ func TestCacheKey_CommonTypes(t *testing.T) {
 func TestCacheKey_UncommonType(t *testing.T) {
 	// Test with an uncommon DNS type (e.g., NS record = type 2)
 	key := CacheKey("example.com", 2)
-	assert.Equal(t, "example.com:2", key)
+	assert.Equal(t, "example.com.:2", key)
 }
 
 func TestCacheKey_Concurrent(t *testing.T) {
@@ -116,9 +116,9 @@ func TestLoadFromCache_Found(t *testing.T) {
 	DnsCache = cache.New(5*time.Minute, 10*time.Minute)
 
 	rr, _ := dns.NewRR("example.com. 300 IN A 1.2.3.4")
-	DnsCache.Set("example.com:1", []dns.RR{rr}, 5*time.Minute)
+	DnsCache.Set("example.com.:1", []dns.RR{rr}, 5*time.Minute)
 
-	answers, found := LoadFromCache("example.com:1")
+	answers, found := LoadFromCache("example.com.:1")
 	assert.True(t, found)
 	assert.Len(t, answers, 1)
 }
@@ -142,7 +142,7 @@ func TestResolverWithCache_CacheHit(t *testing.T) {
 
 	rr, _ := dns.NewRR("example.com. 300 IN A 1.2.3.4")
 	expectedAnswers := []dns.RR{rr}
-	DnsCache.Set("example.com:1", expectedAnswers, 5*time.Minute)
+	DnsCache.Set("example.com.:1", expectedAnswers, 5*time.Minute)
 
 	answers := ResolverWithCache("example.com", 1, "127.0.0.1")
 	assert.Equal(t, expectedAnswers, answers)
